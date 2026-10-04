@@ -135,6 +135,14 @@ dotnet test FieldOps.slnx          # backend: HTTP integration tests against Tes
 cd src/fieldops-web && npx ng test # frontend: unit tests (Vitest)
 ```
 
+### CI/CD
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push and pull request:
+
+* **Backend** — builds and tests all three solutions, builds the API image, starts the full Docker Compose stack, applies migrations, and checks `/health/ready`.
+* **Frontend** — `npm ci`, unit tests, and a production build of `src/fieldops-web`.
+* **Publish** (pushes to `master` only, after both test jobs pass) — builds the API and frontend images and pushes them to GitHub Container Registry as `ghcr.io/berkanirez/fieldops-api` and `ghcr.io/berkanirez/fieldops-web`, each tagged with the short commit SHA and `latest`.
+
 ### Known limitations
 
 * JWT issuance exists, but no endpoint enforces it yet — requests are still identified by unverified `X-Organization-Id` / `X-Employee-Id` headers. Login takes only an employee id (no password), and role-based hiding in the frontend is a UI convenience, not authorization.

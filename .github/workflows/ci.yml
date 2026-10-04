@@ -126,3 +126,75 @@ jobs:
       - name: Tear down Docker Compose stack
         if: always()
         run: docker compose down
+
+  # Day 104: the Angular frontend (Phase 5) had never been part of CI — its
+  # unit tests only ever ran on a developer machine. Runs in parallel with
+  # the backend job above.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/fieldops-web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/fieldops-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test fieldops-web
+        run: npx ng test --watch=false
+
+      - name: Build fieldops-web
+        run: npm run build
+
+  # Day 104: turns CI from "checks the code" into "delivers deployable
+  # images." Runs only after BOTH test jobs pass, and only for pushes to
+  # master — pull requests are tested but never published.
+  publish-images:
+    needs: [build-and-test, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    # The workflow's automatic GITHUB_TOKEN is read-only by default; pushing
+    # to GitHub Container Registry needs packages: write. No stored secret
+    # is involved — the token is issued per run and expires with it.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Each image gets two tags: the commit SHA (an exact, never-reused
+      # record of which code it was built from — what a rollback will point
+      # back to) and "latest" (a moving pointer to the newest build).
+      # Registry names must be lowercase, hence the tr.
+      # The org.opencontainers.image.source label links each package to this
+      # repository on GitHub.
+      - name: Build and push images
+        run: |
+          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          SHA_TAG="${GITHUB_SHA::7}"
+          SOURCE_LABEL="org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+
+          API_IMAGE="ghcr.io/${OWNER}/fieldops-api"
+          docker build --label "$SOURCE_LABEL" -t "${API_IMAGE}:${SHA_TAG}" -t "${API_IMAGE}:latest" .
+          docker push "${API_IMAGE}:${SHA_TAG}"
+          docker push "${API_IMAGE}:latest"
+
+          WEB_IMAGE="ghcr.io/${OWNER}/fieldops-web"
+          docker build --label "$SOURCE_LABEL" -t "${WEB_IMAGE}:${SHA_TAG}" -t "${WEB_IMAGE}:latest" src/fieldops-web
+          docker push "${WEB_IMAGE}:${SHA_TAG}"
+          docker push "${WEB_IMAGE}:latest"
+
+          echo "Published ${API_IMAGE}:${SHA_TAG} and ${WEB_IMAGE}:${SHA_TAG}"
