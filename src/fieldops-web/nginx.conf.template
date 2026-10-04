@@ -17,7 +17,14 @@ server {
     # original request path, so /api/organizations reaches the API unchanged.
     location /api/ {
         proxy_pass ${API_UPSTREAM};
-        proxy_set_header Host $host;
+        # Day 107: Host must be the API's own host ($proxy_host), not the
+        # frontend's ($host). Kubernetes Services route at the network level
+        # and ignore Host, but Azure Container Apps' ingress picks the target
+        # app by Host header — forwarding the frontend's Host would send the
+        # request to the wrong app. The original host is still passed along
+        # in X-Forwarded-Host.
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
