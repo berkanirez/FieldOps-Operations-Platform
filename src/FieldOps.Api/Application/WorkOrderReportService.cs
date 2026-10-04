@@ -25,15 +25,25 @@ public class WorkOrderReportService
         _logger = logger;
     }
 
+    // Day 108 fix: the cache is an accelerator, never a dependency. Both
+    // Redis calls are guarded so an unreachable Redis (found live on Azure,
+    // Day 107, where no Redis is deployed) degrades to "always compute from
+    // the database" instead of a 500. Same principle as InvalidateCache below.
     public WorkOrderStatusReport GetStatusReport(int organizationId)
     {
-        var db = _redis.GetDatabase();
         var cacheKey = $"workorders:report:{organizationId}";
 
-        var cached = db.StringGet(cacheKey);
-        if (cached.HasValue)
+        try
         {
-            return JsonSerializer.Deserialize<WorkOrderStatusReport>((string)cached!)!;
+            var cached = _redis.GetDatabase().StringGet(cacheKey);
+            if (cached.HasValue)
+            {
+                return JsonSerializer.Deserialize<WorkOrderStatusReport>((string)cached!)!;
+            }
+        }
+        catch (RedisException ex)
+        {
+            _logger.LogWarning(ex, "Redis read failed for work order report of organization {OrganizationId}; computing from database", organizationId);
         }
 
         var workOrders = _workOrderDirectory.GetAll()
@@ -47,7 +57,15 @@ public class WorkOrderReportService
             InProgress: workOrders.Count(w => w.Status == WorkOrderStatus.InProgress),
             Completed: workOrders.Count(w => w.Status == WorkOrderStatus.Completed));
 
-        db.StringSet(cacheKey, JsonSerializer.Serialize(report), CacheDuration);
+        try
+        {
+            _redis.GetDatabase().StringSet(cacheKey, JsonSerializer.Serialize(report), CacheDuration);
+        }
+        catch (RedisException ex)
+        {
+            _logger.LogWarning(ex, "Redis write failed for work order report of organization {OrganizationId}; returning uncached result", organizationId);
+        }
+
         return report;
     }
 
