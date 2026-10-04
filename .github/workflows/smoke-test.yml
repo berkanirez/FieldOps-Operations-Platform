@@ -1,0 +1,31 @@
+name: Smoke test
+
+# Run scripts/smoke-test.sh against a deployed environment on demand
+# (Actions -> Smoke test -> Run workflow). The job turns red when the script
+# exits non-zero. Deploys are still manual, so this is triggered by hand after
+# one; a CI/CD deploy job would run the same script right after deploying.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Public frontend URL to verify (e.g. https://fieldops-web.<env>.azurecontainerapps.io)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run smoke test
+        # The input goes through an environment variable rather than being
+        # pasted into the script with ${{ }} — otherwise whatever someone
+        # types into the form would become part of the shell command itself.
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: bash scripts/smoke-test.sh "$BASE_URL"
