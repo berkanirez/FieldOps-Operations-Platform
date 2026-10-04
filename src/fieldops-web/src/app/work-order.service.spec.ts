@@ -27,7 +27,7 @@ describe('WorkOrderService', () => {
     let result: unknown;
     service.getById(2).subscribe(workOrder => (result = workOrder));
 
-    httpMock.expectOne('http://localhost:5138/api/workorders').flush([
+    httpMock.expectOne('/api/workorders').flush([
       { id: 1, title: 'First', status: 0 },
       { id: 2, title: 'Second', status: 1 },
     ]);
@@ -39,7 +39,7 @@ describe('WorkOrderService', () => {
     let result: unknown = 'not-set';
     service.getById(999).subscribe(workOrder => (result = workOrder));
 
-    httpMock.expectOne('http://localhost:5138/api/workorders').flush([{ id: 1, title: 'First', status: 0 }]);
+    httpMock.expectOne('/api/workorders').flush([{ id: 1, title: 'First', status: 0 }]);
 
     expect(result).toBeUndefined();
   });
@@ -48,7 +48,7 @@ describe('WorkOrderService', () => {
     let result: unknown;
     service.getReport().subscribe(report => (result = report));
 
-    const request = httpMock.expectOne('http://localhost:5138/api/workorders/report');
+    const request = httpMock.expectOne('/api/workorders/report');
     expect(request.request.method).toBe('GET');
     request.flush({ organizationId: 1, open: 2, assigned: 0, inProgress: 1, completed: 4 });
 

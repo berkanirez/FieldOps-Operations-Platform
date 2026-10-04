@@ -28,13 +28,13 @@ describe('WorkOrderList', () => {
 
     it('should create', () => {
       fixture.detectChanges();
-      httpMock.expectOne('http://localhost:5138/api/workorders').flush([]);
+      httpMock.expectOne('/api/workorders').flush([]);
       expect(fixture.componentInstance).toBeTruthy();
     });
 
     it('should request the real endpoint with the demo organization/employee headers', () => {
       fixture.detectChanges();
-      const request = httpMock.expectOne('http://localhost:5138/api/workorders');
+      const request = httpMock.expectOne('/api/workorders');
       expect(request.request.method).toBe('GET');
       expect(request.request.headers.get('X-Organization-Id')).toBe('1');
       expect(request.request.headers.get('X-Employee-Id')).toBe('1');
@@ -53,7 +53,7 @@ describe('WorkOrderList', () => {
     // now correctly produces rendered rows.
     it('renders real rows after a genuine HTTP flush (regression test for the zoneless signal fix)', () => {
       fixture.detectChanges();
-      httpMock.expectOne('http://localhost:5138/api/workorders').flush([{ id: 1, title: 'Real flush order', status: 0 }]);
+      httpMock.expectOne('/api/workorders').flush([{ id: 1, title: 'Real flush order', status: 0 }]);
       fixture.detectChanges();
 
       const rows = fixture.nativeElement.querySelectorAll('tbody tr');

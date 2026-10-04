@@ -28,7 +28,7 @@ describe('AuthService', () => {
   it('stores the token after a successful login', () => {
     service.login(1).subscribe();
 
-    const request = httpMock.expectOne('http://localhost:5138/api/auth/login');
+    const request = httpMock.expectOne('/api/auth/login');
     expect(request.request.body).toEqual({ employeeId: 1 });
     request.flush({ token: 'fake-token', employeeId: 1, organizationId: 1, role: 'Admin' });
 
@@ -39,7 +39,7 @@ describe('AuthService', () => {
   it('isAdmin reflects the role returned by login', () => {
     service.login(1).subscribe();
     httpMock
-      .expectOne('http://localhost:5138/api/auth/login')
+      .expectOne('/api/auth/login')
       .flush({ token: 'fake-token', employeeId: 1, organizationId: 1, role: 'Admin' });
     expect(service.isAdmin()).toBe(true);
   });
@@ -47,7 +47,7 @@ describe('AuthService', () => {
   it('isAdmin is false for a non-Admin role', () => {
     service.login(2).subscribe();
     httpMock
-      .expectOne('http://localhost:5138/api/auth/login')
+      .expectOne('/api/auth/login')
       .flush({ token: 'fake-token', employeeId: 2, organizationId: 1, role: 'Member' });
     expect(service.isAdmin()).toBe(false);
   });

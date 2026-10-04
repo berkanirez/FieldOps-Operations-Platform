@@ -5,11 +5,8 @@ import { LoginResponse } from './login-response';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
-  // Day 90: hardcoded, same demo organization/employee every other day's
-  // curl verification has used. No login/JWT exists yet (that's a later
-  // Week 18 topic) — this is a deliberate, temporary stand-in for real
-  // authentication, not a production shape.
-  private readonly apiBaseUrl = 'http://localhost:5138/api/auth';
+  // Day 105: relative for the same reason as WorkOrderService.
+  private readonly apiBaseUrl = '/api/auth';
 
   // Day 94: kept only in memory (a signal), not localStorage — the simplest
   // possible demo. It means the token is lost on every page refresh; a real

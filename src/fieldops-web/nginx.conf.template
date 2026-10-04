@@ -1,0 +1,29 @@
+# Day 105: a template, not a final config. At container start, the official
+# nginx image runs envsubst over /etc/nginx/templates/*.template, replacing
+# ${API_UPSTREAM} with that environment variable's value and writing the
+# result to /etc/nginx/conf.d/. Only variables actually defined in the
+# environment are substituted, so nginx's own variables ($uri, $host, ...)
+# are left untouched.
+server {
+    listen 80;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # The Angular app calls relative /api/... URLs; nginx forwards them to the
+    # real API. The API's address lives in the environment (a Kubernetes
+    # ConfigMap/env var, an Azure setting), not inside the image — the same
+    # image works in every environment. proxy_pass without a path keeps the
+    # original request path, so /api/organizations reaches the API unchanged.
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Day 98: client-side routing fallback for every other path.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

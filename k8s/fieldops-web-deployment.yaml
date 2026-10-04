@@ -17,13 +17,20 @@ spec:
     spec:
       containers:
         - name: fieldops-web
-          image: fieldops-web:day98
-          # The image only exists locally (built on Day 98, never pushed to
-          # any registry) — "Always" would make Kubernetes try, and fail, to
-          # pull it from Docker Hub. A real registry is Week 20's topic.
+          image: fieldops-web:day105
+          # A locally built image (the local cluster never pulls it from
+          # anywhere). Since Day 104, CI also publishes this image to
+          # ghcr.io/berkanirez/fieldops-web, which a cloud cluster would use.
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
+          # Day 105: where nginx forwards /api/... — the API's Service name,
+          # resolved by the cluster's own DNS. The image itself contains no
+          # API address. Note: nginx resolves this name when it starts, so
+          # the fieldops-api Service must exist before this Pod starts.
+          env:
+            - name: API_UPSTREAM
+              value: "http://fieldops-api"
           # Day 103: the HorizontalPodAutoscaler computes "% CPU" relative to
           # this request — without it, CPU-based autoscaling can't work at all.
           # Deliberately tiny: nginx serving static files barely uses CPU, so

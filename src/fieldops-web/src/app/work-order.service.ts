@@ -11,7 +11,11 @@ export class WorkOrderService {
   // curl verification has used. No login/JWT exists yet (that's a later
   // Week 18 topic) — this is a deliberate, temporary stand-in for real
   // authentication, not a production shape.
-  private readonly apiBaseUrl = 'http://localhost:5138/api/workorders';
+  // Day 105: relative, not http://localhost:5138 — in a browser, "localhost"
+  // means the visitor's own machine, so a hardcoded host only ever worked on
+  // a developer laptop. Requests now go to whatever origin served the page;
+  // nginx (production) or proxy.conf.json (ng serve) forwards /api onward.
+  private readonly apiBaseUrl = '/api/workorders';
   private readonly demoHeaders = new HttpHeaders({
     'X-Organization-Id': '1',
     'X-Employee-Id': '1',

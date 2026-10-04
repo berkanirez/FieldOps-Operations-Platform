@@ -31,17 +31,17 @@ describe('authInterceptor', () => {
   it('adds an Authorization header when a token exists', () => {
     authServiceStub.getToken = () => 'real-token';
 
-    http.get('http://localhost:5138/api/workorders').subscribe();
+    http.get('/api/workorders').subscribe();
 
-    const request = httpMock.expectOne('http://localhost:5138/api/workorders');
+    const request = httpMock.expectOne('/api/workorders');
     expect(request.request.headers.get('Authorization')).toBe('Bearer real-token');
     request.flush([]);
   });
 
   it('sends no Authorization header when there is no token', () => {
-    http.get('http://localhost:5138/api/workorders').subscribe();
+    http.get('/api/workorders').subscribe();
 
-    const request = httpMock.expectOne('http://localhost:5138/api/workorders');
+    const request = httpMock.expectOne('/api/workorders');
     expect(request.request.headers.has('Authorization')).toBe(false);
     request.flush([]);
   });

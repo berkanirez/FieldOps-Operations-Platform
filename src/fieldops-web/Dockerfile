@@ -20,8 +20,16 @@ RUN npm run build
 # already-built static files plus a web server to serve them.
 FROM nginx:alpine AS final
 COPY --from=build /app/dist/fieldops-web/browser /usr/share/nginx/html
-# Day 98: replaces nginx's own default site config, which has no idea about
-# Angular's client-side routing (Day 91) — without this, any direct hit on
-# a route like /work-orders/28 404s, because nginx looks for a literal file
-# at that path instead of handing the request to Angular's router.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Day 98: replaces nginx's own default site config (client-side routing
+# fallback). Day 105: now a template — the nginx image renders
+# /etc/nginx/templates/default.conf.template into /etc/nginx/conf.d/default.conf
+# at container start, filling in ${API_UPSTREAM} from the environment.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+
+# Day 105: a deliberately harmless default so the container always starts,
+# even with nothing configured: nginx resolves proxy_pass hostnames when it
+# starts and refuses to start if a name can't be resolved, while "localhost"
+# always resolves. With this default, /api requests simply fail with 502
+# until a real address is provided (Kubernetes: the Deployment's env; Azure:
+# the app's settings).
+ENV API_UPSTREAM=http://localhost:5138

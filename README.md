@@ -86,15 +86,18 @@ curl http://localhost:5190/api/workorders/report -H "X-Organization-Id: 1" -H "X
 
 An Angular 22 app with work order list, detail, create, dashboard, and login screens. It uses standalone components, signals (the app is zoneless), reactive forms, client-side routing, and an HTTP interceptor that attaches a JWT from `POST /api/auth/login` to outgoing requests.
 
-To run it against a locally running API (`cd src/FieldOps.Api && dotnet run` on `http://localhost:5138`, which allows CORS from `http://localhost:4200`):
+The app calls the API through relative `/api/...` URLs, so it contains no API address and the same build works in every environment:
 
-```
-cd src/fieldops-web
-npm install
-npm start
-```
+* **Local development** — `npm start` proxies `/api` to `http://localhost:5138` (see `proxy.conf.json`). Run the API first (`cd src/FieldOps.Api && dotnet run`):
 
-Then open `http://localhost:4200`.
+  ```
+  cd src/fieldops-web
+  npm install
+  npm start
+  ```
+
+  Then open `http://localhost:4200`.
+* **Container** — nginx serves the app and reverse-proxies `/api` to the address in the `API_UPSTREAM` environment variable (rendered into the nginx config at container start from `nginx.conf.template`). Without it, the container still starts and `/api` returns `502`.
 
 ### Kubernetes (`k8s/`)
 
@@ -103,7 +106,7 @@ Then open `http://localhost:4200`.
 
 ```
 # frontend
-docker build -t fieldops-web:day98 src/fieldops-web
+docker build -t fieldops-web:day105 src/fieldops-web
 kubectl apply -f k8s/fieldops-web-deployment.yaml -f k8s/fieldops-web-service.yaml -f k8s/fieldops-web-hpa.yaml
 
 # API (dependencies first: docker compose up -d sqlserver redis rabbitmq elasticsearch, then migrations)
