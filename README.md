@@ -149,6 +149,20 @@ A demo deployment on **Azure Container Apps**, using the images CI publishes to 
 
 Redis, RabbitMQ, and Elasticsearch are intentionally not deployed (to stay within free limits): the API keeps working without them, but caching, messaging, notifications, and search are inactive there.
 
+**Deploying a new version and rolling back.** Every image is tagged with its commit SHA, so a deploy and a rollback are the same command with a different tag; each creates a new Container Apps revision:
+
+```bash
+az containerapp update --name fieldops-api --resource-group <rg> --image ghcr.io/berkanirez/fieldops-api:<sha>
+```
+
+**Verifying a deployment.** [`scripts/smoke-test.sh`](scripts/smoke-test.sh) checks the frontend, an Angular deep link, the API with its database, and the report endpoint through the public URL. It retries to ride out scale-to-zero cold starts, checks response bodies as well as status codes, and exits `0` (healthy) or `1` (failed):
+
+```bash
+scripts/smoke-test.sh https://<frontend-app>.<environment>.azurecontainerapps.io
+```
+
+Logs from the containers go to a Log Analytics workspace (queryable with KQL), and Container Apps exposes request and replica metrics.
+
 ### CI/CD
 
 GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push and pull request:
@@ -164,6 +178,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 * The AI provider is a deterministic fake; evidence "attachments" are plain text notes.
 * In Kubernetes, the API's dependencies (SQL Server, Redis, RabbitMQ, Elasticsearch) still run outside the cluster under Docker Compose, and the notification service is not deployed to the cluster yet.
 * Migrations are applied by hand rather than by a dedicated migration job.
+* Deployments to Azure are run by hand (`az containerapp update` followed by the smoke test) rather than by a CI/CD deploy step.
+* EF Core is not configured with transient-fault retries (`EnableRetryOnFailure`), so the first requests while an auto-paused Azure SQL database resumes can fail.
 
 ---
 
