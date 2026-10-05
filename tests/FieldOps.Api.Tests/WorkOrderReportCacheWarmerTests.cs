@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -44,30 +43,5 @@ public class WorkOrderReportCacheWarmerTests : IClassFixture<FieldOpsApiFactory>
 
         Assert.DoesNotContain(logs.Entries, e => e.Message.StartsWith("Redis read failed for work order report"));
         Assert.Single(logs.Entries, e => e.Message.StartsWith("Redis is unavailable; pausing work order report cache warming"));
-    }
-
-    private sealed class CapturingLoggerProvider : ILoggerProvider
-    {
-        private readonly ConcurrentQueue<(string Category, string Message)> _entries = new();
-
-        public IReadOnlyCollection<(string Category, string Message)> Entries => _entries.ToArray();
-
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _entries);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class CapturingLogger(string category, ConcurrentQueue<(string, string)> entries) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            {
-                entries.Enqueue((category, formatter(state, exception)));
-            }
-        }
     }
 }

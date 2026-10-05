@@ -24,11 +24,14 @@
     <ProjectReference Include="..\FieldOps.Modules.Customers\FieldOps.Modules.Customers.csproj" />
     <ProjectReference Include="..\FieldOps.Modules.AuditLogs\FieldOps.Modules.AuditLogs.csproj" />
   </ItemGroup>
+  <!-- Day 123 (SECURITY_REVIEW.md F11): pinned to the exact version the
+       former floating "4.10.*" range resolved to, so every restore produces
+       the same build; upgrades become a deliberate, reviewed change. -->
   <ItemGroup>
-    <PackageReference Include="System.ServiceModel.Duplex" Version="4.10.*" />
-    <PackageReference Include="System.ServiceModel.Http" Version="4.10.*" />
-    <PackageReference Include="System.ServiceModel.NetTcp" Version="4.10.*" />
-    <PackageReference Include="System.ServiceModel.Security" Version="4.10.*" />
-    <PackageReference Include="System.ServiceModel.Federation" Version="4.10.*" />
+    <PackageReference Include="System.ServiceModel.Duplex" Version="4.10.3" />
+    <PackageReference Include="System.ServiceModel.Http" Version="4.10.3" />
+    <PackageReference Include="System.ServiceModel.NetTcp" Version="4.10.3" />
+    <PackageReference Include="System.ServiceModel.Security" Version="4.10.3" />
+    <PackageReference Include="System.ServiceModel.Federation" Version="4.10.3" />
   </ItemGroup>
 </Project>

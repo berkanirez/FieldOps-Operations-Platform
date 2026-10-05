@@ -10,7 +10,19 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:5299';
-const HEADERS = { 'X-Organization-Id': '1', 'X-Employee-Id': '1' };
+const PASSWORD = __ENV.PASSWORD || 'FieldOps-Demo-2026!';
+
+// Day 123: the API takes identity from a JWT (Day 121), so the scenario logs
+// in ONCE in setup() — which runs before the test, its return value handed
+// to every VU — instead of per iteration, which would hit the login rate
+// limit (5/min) and measure login instead of the endpoints under test.
+export function setup() {
+  const login = http.post(`${BASE_URL}/api/auth/login`, JSON.stringify({ employeeId: 1, password: PASSWORD }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  check(login, { 'login returns 200': (r) => r.status === 200 });
+  return { headers: { Authorization: `Bearer ${login.json('token')}` } };
+}
 
 const load = __ENV.VUS
   ? { vus: Number(__ENV.VUS), duration: __ENV.DURATION || '30s' }
@@ -35,15 +47,15 @@ export const options = {
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
 };
 
-export default function () {
+export default function (data) {
   const list = http.get(`${BASE_URL}/api/workorders?page=1&pageSize=50`, {
-    headers: HEADERS,
+    headers: data.headers,
     tags: { endpoint: 'list' },
   });
   check(list, { 'list returns 200': (r) => r.status === 200 });
 
   const report = http.get(`${BASE_URL}/api/workorders/report`, {
-    headers: HEADERS,
+    headers: data.headers,
     tags: { endpoint: 'report' },
   });
   check(report, { 'report returns 200': (r) => r.status === 200 });

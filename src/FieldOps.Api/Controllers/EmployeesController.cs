@@ -40,34 +40,23 @@ public class EmployeesController : ControllerBase
     // queried. Deliberately NOT role-restricted (Admin vs Member) — that
     // stays the open product question from Day 37's independent task; this
     // only closes the "no identity at all" hole.
+    //
+    // Day 123: identity from the validated token (SECURITY_REVIEW.md F1), not
+    // headers; the "list another organization by naming its id" exploit is
+    // structurally gone — the organization IS the caller's. The membership
+    // check stays for the same reason as in WorkOrdersController (a token
+    // can outlive the employee or their organization). The organization
+    // filter now runs in SQL (Day 113's lesson).
     [HttpGet]
-    public ActionResult<IReadOnlyList<EmployeeDto>> GetAll(
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+    public async Task<ActionResult<IReadOnlyList<EmployeeDto>>> GetAll(CancellationToken cancellationToken)
     {
-        if (organizationId is null)
+        var (actingEmployee, identityError) = await GetActingEmployeeAsync(cancellationToken);
+        if (identityError is not null)
         {
-            return BadRequest("X-Organization-Id header is required.");
+            return identityError;
         }
 
-        if (actingEmployeeId is null)
-        {
-            return BadRequest("X-Employee-Id header is required.");
-        }
-
-        var actingEmployee = _employeeDirectory.GetById(actingEmployeeId.Value);
-        if (actingEmployee is null)
-        {
-            return BadRequest($"Employee {actingEmployeeId} does not exist.");
-        }
-
-        if (actingEmployee.OrganizationId != organizationId)
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, "You can only view employees within your own organization.");
-        }
-
-        var employees = _employeeDirectory.GetAll()
-            .Where(e => e.OrganizationId == organizationId)
+        var employees = (await _employeeDirectory.GetByOrganizationAsync(actingEmployee!.OrganizationId, cancellationToken))
             .Select(e => new EmployeeDto(e.Id, e.Name, e.OrganizationId, e.Role))
             .ToList();
 
@@ -82,51 +71,33 @@ public class EmployeesController : ControllerBase
     // identity. Only an Admin-role employee (looked up by that id) may create
     // new employees; a Member gets 403, matching StockPilot Day 25's
     // Admin/Employee distinction, but scoped per-tenant instead of system-wide.
+    //
+    // Day 123: identity from the token. Day 38's horizontal-escalation check
+    // ("an Admin of organization 1 naming organization 2") is now enforced
+    // by construction: the new employee's organization is the token's, so
+    // there is no client-supplied organization left to compare against.
     [HttpPost]
-    public ActionResult<EmployeeDto> Create(
-        CreateEmployeeRequest request,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+    public async Task<ActionResult<EmployeeDto>> Create(CreateEmployeeRequest request, CancellationToken cancellationToken)
     {
-        if (organizationId is null)
+        var (actingEmployee, identityError) = await GetActingEmployeeAsync(cancellationToken);
+        if (identityError is not null)
         {
-            return BadRequest("X-Organization-Id header is required.");
+            return identityError;
         }
 
-        if (actingEmployeeId is null)
-        {
-            return BadRequest("X-Employee-Id header is required.");
-        }
-
-        var actingEmployee = _employeeDirectory.GetById(actingEmployeeId.Value);
-        if (actingEmployee is null)
-        {
-            return BadRequest($"Employee {actingEmployeeId} does not exist.");
-        }
-
-        if (actingEmployee.Role != EmployeeRole.Admin)
+        if (actingEmployee!.Role != EmployeeRole.Admin)
         {
             return StatusCode(StatusCodes.Status403Forbidden, "Only an Admin can create employees.");
         }
 
-        // Day 38: Day 37's Admin check alone was not enough — it never asked
-        // WHICH organization the acting Admin is actually an Admin of.
-        // Live-proven exploit before this line existed: Org 1's Admin could
-        // create an employee in Org 2 just by sending Org 2's
-        // X-Organization-Id, because nothing here ever compared it against
-        // the acting employee's own OrganizationId. This is horizontal
-        // privilege escalation — the right role, but for the wrong tenant.
-        if (actingEmployee.OrganizationId != organizationId)
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, "An Admin can only create employees within their own organization.");
-        }
+        var organizationId = actingEmployee.OrganizationId;
 
         // The cross-module orchestration (does this organization exist? if
         // so, create the employee) now lives entirely in
         // EmployeeApplicationService (Day 34) — this action's only job is
         // translating that plain result into an HTTP response. organizationId
         // now comes from the header, never from the request body (Day 35).
-        var result = _employeeApplicationService.CreateEmployee(request.Name, organizationId.Value, request.Password);
+        var result = _employeeApplicationService.CreateEmployee(request.Name, organizationId, request.Password);
         if (!result.Succeeded)
         {
             return BadRequest(result.Error);
@@ -138,5 +109,31 @@ public class EmployeesController : ControllerBase
         // so there's no correct target for a Location header via
         // CreatedAtAction — 201 is returned directly instead.
         return StatusCode(StatusCodes.Status201Created, dto);
+    }
+
+    // Day 123: the caller, from the validated token — and still checked
+    // against the database: the token may name an employee who was deleted
+    // (401) or whose organization changed after login (403).
+    private async Task<(EmployeeSummary? Employee, ActionResult? Error)> GetActingEmployeeAsync(CancellationToken cancellationToken)
+    {
+        var employeeId = User.GetEmployeeId();
+        var organizationId = User.GetOrganizationId();
+        if (employeeId is null || organizationId is null)
+        {
+            return (null, Unauthorized());
+        }
+
+        var employee = await _employeeDirectory.GetByIdAsync(employeeId.Value, cancellationToken);
+        if (employee is null)
+        {
+            return (null, Unauthorized());
+        }
+
+        if (employee.OrganizationId != organizationId)
+        {
+            return (null, StatusCode(StatusCodes.Status403Forbidden, "You can only act within your own organization."));
+        }
+
+        return (employee, null);
     }
 }

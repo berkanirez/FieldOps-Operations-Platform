@@ -74,6 +74,9 @@ public class EmployeeApplicationServiceTests
 
         public IReadOnlyList<EmployeeSummary> GetAll() => _employees;
 
+        public Task<IReadOnlyList<EmployeeSummary>> GetByOrganizationAsync(int organizationId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<EmployeeSummary>>(_employees.Where(e => e.OrganizationId == organizationId).ToList());
+
         public EmployeeSummary? GetById(int id) => _employees.FirstOrDefault(e => e.Id == id);
 
         public Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken) => Task.FromResult(GetById(id));

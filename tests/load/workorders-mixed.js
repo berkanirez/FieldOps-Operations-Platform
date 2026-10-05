@@ -15,8 +15,21 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:5299';
-const ADMIN = { 'X-Organization-Id': '1', 'X-Employee-Id': '1', 'Content-Type': 'application/json' };
-const MEMBER = { 'X-Organization-Id': '1', 'X-Employee-Id': '2', 'Content-Type': 'application/json' };
+const PASSWORD = __ENV.PASSWORD || 'FieldOps-Demo-2026!';
+
+// Day 123: identity comes from a JWT; both tokens are obtained once in
+// setup() (see workorders.js for why not per iteration).
+function loginAs(employeeId) {
+  const response = http.post(`${BASE_URL}/api/auth/login`, JSON.stringify({ employeeId, password: PASSWORD }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  check(response, { 'login returns 200': (r) => r.status === 200 });
+  return { Authorization: `Bearer ${response.json('token')}`, 'Content-Type': 'application/json' };
+}
+
+export function setup() {
+  return { admin: loginAs(1), member: loginAs(2) };
+}
 
 export const options = {
   scenarios: {
@@ -31,30 +44,30 @@ export const options = {
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
 };
 
-export function read() {
-  const list = http.get(`${BASE_URL}/api/workorders?page=1&pageSize=50`, { headers: ADMIN, tags: { kind: 'read' } });
+export function read(data) {
+  const list = http.get(`${BASE_URL}/api/workorders?page=1&pageSize=50`, { headers: data.admin, tags: { kind: 'read' } });
   check(list, { 'list returns 200': (r) => r.status === 200 });
-  const report = http.get(`${BASE_URL}/api/workorders/report`, { headers: ADMIN, tags: { kind: 'read' } });
+  const report = http.get(`${BASE_URL}/api/workorders/report`, { headers: data.admin, tags: { kind: 'read' } });
   check(report, { 'report returns 200': (r) => r.status === 200 });
   sleep(0.5);
 }
 
-export function write() {
+export function write(data) {
   const params = (headers) => ({ headers, tags: { kind: 'write' } });
 
-  const created = http.post(`${BASE_URL}/api/workorders`, JSON.stringify({ title: `Day119-load-${__VU}-${__ITER}` }), params(ADMIN));
+  const created = http.post(`${BASE_URL}/api/workorders`, JSON.stringify({ title: `Day119-load-${__VU}-${__ITER}` }), params(data.admin));
   if (!check(created, { 'create returns 201': (r) => r.status === 201 })) {
     return;
   }
   const id = created.json('id');
 
-  const assigned = http.post(`${BASE_URL}/api/workorders/${id}/assign`, JSON.stringify({ employeeId: 2 }), params(ADMIN));
+  const assigned = http.post(`${BASE_URL}/api/workorders/${id}/assign`, JSON.stringify({ employeeId: 2 }), params(data.admin));
   check(assigned, { 'assign returns 200': (r) => r.status === 200 });
 
-  const started = http.post(`${BASE_URL}/api/workorders/${id}/start`, null, params(MEMBER));
+  const started = http.post(`${BASE_URL}/api/workorders/${id}/start`, null, params(data.member));
   check(started, { 'start returns 200': (r) => r.status === 200 });
 
-  const completed = http.post(`${BASE_URL}/api/workorders/${id}/complete`, null, params(MEMBER));
+  const completed = http.post(`${BASE_URL}/api/workorders/${id}/complete`, null, params(data.member));
   check(completed, { 'complete returns 200': (r) => r.status === 200 });
 
   sleep(0.5);

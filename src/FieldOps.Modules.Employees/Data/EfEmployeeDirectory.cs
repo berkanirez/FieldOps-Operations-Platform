@@ -17,11 +17,13 @@ internal class EfEmployeeDirectory : IEmployeeDirectory
         _dbContext = dbContext;
     }
 
-    public IReadOnlyList<EmployeeSummary> GetAll()
+    public async Task<IReadOnlyList<EmployeeSummary>> GetByOrganizationAsync(int organizationId, CancellationToken cancellationToken)
     {
-        return _dbContext.Employees
+        return await _dbContext.Employees
+            .Where(e => e.OrganizationId == organizationId)
+            .OrderBy(e => e.Id)
             .Select(e => new EmployeeSummary(e.Id, e.Name, e.OrganizationId, e.Role))
-            .ToList();
+            .ToListAsync(cancellationToken);
     }
 
     public EmployeeSummary? GetById(int id)

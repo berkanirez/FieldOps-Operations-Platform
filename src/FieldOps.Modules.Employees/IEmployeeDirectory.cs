@@ -7,7 +7,10 @@ namespace FieldOps.Modules.Employees;
 // performed BEFORE Create is ever called.
 public interface IEmployeeDirectory
 {
-    IReadOnlyList<EmployeeSummary> GetAll();
+    // Day 123: replaces GetAll(), whose only caller filtered every
+    // organization's employees in memory (Day 113's fetch-all pattern) —
+    // the organization filter now runs in SQL.
+    Task<IReadOnlyList<EmployeeSummary>> GetByOrganizationAsync(int organizationId, CancellationToken cancellationToken);
     EmployeeSummary? GetById(int id);
 
     // Day 118: every work-order request's membership check looks up the

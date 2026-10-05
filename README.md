@@ -59,7 +59,7 @@ Then visit:
 
 * `http://localhost:5190/health/ready` — dependency health
 * `http://localhost:5190/api/organizations` — seeded organizations
-* `http://localhost:5190/api/workorders` — requires `X-Organization-Id` and `X-Employee-Id` headers (see below)
+* `http://localhost:5190/api/workorders` — requires a bearer token from `POST /api/auth/login` (see below)
 
 Tear down with `docker compose down`.
 
@@ -182,7 +182,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 A security self-review against the OWASP Top 10, with reproducible evidence and a prioritized fix plan, is in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
-* Every API endpoint requires a JWT (except login, health checks and customer approval). Work-order endpoints take the caller's identity from the token; the Employees, Organizations and Billing controllers still read `X-Organization-Id` / `X-Employee-Id` headers (with a token required). Passwords are stored as PBKDF2 hashes, but there is no password policy beyond a minimum length, no reset, lockout or MFA, and the login rate limit needs forwarded-header configuration behind a reverse proxy. Role-based hiding in the frontend is a UI convenience, not authorization.
+* Every API endpoint requires a JWT (except login, health checks and customer approval) and takes the caller's identity from it; customer approval still trusts an `X-Customer-Id` header because customers cannot log in yet. Passwords are stored as PBKDF2 hashes, but there is no password policy beyond a minimum length, no reset, lockout or MFA, and the login rate limit needs forwarded-header configuration behind a reverse proxy. Role-based hiding in the frontend is a UI convenience, not authorization.
 * The demo JWT signing key is in `appsettings.Development.json` (development only); outside Development the API refuses to start unless `Jwt__SigningKey` is supplied.
 * The AI provider is a deterministic fake; evidence "attachments" are plain text notes.
 * In Kubernetes, the API's dependencies (SQL Server, Redis, RabbitMQ, Elasticsearch) still run outside the cluster under Docker Compose, and the notification service is not deployed to the cluster yet.

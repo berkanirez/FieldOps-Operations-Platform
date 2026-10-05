@@ -56,6 +56,13 @@ builder.Services.AddOpenTelemetry()
 // Add services to the container.
 
 builder.Services.AddControllers();
+
+// Day 123 (SECURITY_REVIEW.md F10): one consistent RFC 9110 ProblemDetails
+// shape for errors, including unhandled exceptions (see UseExceptionHandler
+// below) — before, Production answered an unhandled exception with a bare,
+// body-less 500. The default ProblemDetails includes a traceId, which links a
+// client's error report to the server logs without revealing internals.
+builder.Services.AddProblemDetails();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -273,6 +280,19 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // Day 123 (SECURITY_REVIEW.md F12): every rejection is a security event
+    // (a burst of them is what password guessing or abuse looks like).
+    options.OnRejected = (context, _) =>
+    {
+        var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(SecurityEvents.Category);
+        var policy = context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()?.PolicyName ?? "unknown";
+        logger.LogWarning("Security event {SecurityEvent}: {Policy} limit exceeded for {Path} from {ClientIp} (organization {OrganizationId})",
+            SecurityEvents.RateLimitExceeded, policy, context.HttpContext.Request.Path.Value,
+            context.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            context.HttpContext.User.GetOrganizationId()?.ToString() ?? "anonymous");
+        return ValueTask.CompletedTask;
+    };
+
     // Day 122 (SECURITY_REVIEW.md F5/F6, and a regression introduced on
     // Day 121): partitioned by the organization in the VALIDATED token, not
     // the X-Organization-Id header. The header could be rewritten ("01") to
@@ -360,9 +380,15 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi().AllowAnonymous();
 }
 
-// Day 55: registered before everything else so the correlation ID scope
-// wraps the entire rest of the pipeline — every log line produced by any
-// later middleware, controller, or service during this request inherits it.
+// Day 123 (F10): first in the pipeline so an exception thrown anywhere after
+// it becomes a 500 ProblemDetails with no exception message or stack trace
+// in the body (the exception itself is still logged server-side).
+app.UseExceptionHandler();
+
+// Day 55: registered before everything else (now right after the exception
+// handler) so the correlation ID scope wraps the entire rest of the
+// pipeline — every log line produced by any later middleware, controller, or
+// service during this request inherits it.
 app.UseMiddleware<CorrelationIdMiddleware>();
 
 app.UseHttpsRedirection();

@@ -406,18 +406,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // so reassignment tests have a second real, valid target within Org1
     // without depending on more seed data than already exists.
     //
-    // Day 121: EmployeesController still reads identity from headers until
-    // its own conversion, so this one request carries them alongside the
-    // client's bearer token (the work-order endpoints ignore headers now).
+    // Day 123: EmployeesController takes identity from the token too, so the
+    // Day 121 headers on this request are gone.
     private static async Task<int> CreateOrg1EmployeeAsync(HttpClient org1AdminClient, string name)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/employees")
-        {
-            Content = JsonContent.Create(new { Name = name, Password = TestAuth.DemoPassword })
-        };
-        request.Headers.Add("X-Organization-Id", "1");
-        request.Headers.Add("X-Employee-Id", "1");
-        var response = await org1AdminClient.SendAsync(request);
+        var response = await org1AdminClient.PostAsJsonAsync("/api/employees", new { Name = name, Password = TestAuth.DemoPassword });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<EmployeeDto>();
         return body!.Id;

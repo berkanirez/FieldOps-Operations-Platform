@@ -37,11 +37,14 @@ public class AuthController : ControllerBase
     // employee ids exist (a timing side channel).
     private static readonly string TimingEqualizerHash = new EmployeePasswordHasher().Hash(Guid.NewGuid().ToString());
 
-    public AuthController(IEmployeeDirectory employeeDirectory, JwtSettings jwtSettings, EmployeePasswordHasher passwordHasher)
+    private readonly ILogger _securityLogger;
+
+    public AuthController(IEmployeeDirectory employeeDirectory, JwtSettings jwtSettings, EmployeePasswordHasher passwordHasher, ILoggerFactory loggerFactory)
     {
         _employeeDirectory = employeeDirectory;
         _jwtSettings = jwtSettings;
         _passwordHasher = passwordHasher;
+        _securityLogger = loggerFactory.CreateLogger(SecurityEvents.Category);
     }
 
     // Day 122 (SECURITY_REVIEW.md F2 + F7): the password is verified against
@@ -56,10 +59,18 @@ public class AuthController : ControllerBase
         var passwordHash = employee is null ? null : await _employeeDirectory.GetPasswordHashAsync(employee.Id, cancellationToken);
 
         var passwordMatches = _passwordHasher.Verify(passwordHash ?? TimingEqualizerHash, request.Password);
+        var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         if (employee is null || passwordHash is null || !passwordMatches)
         {
+            // Day 123 (F12): recorded server-side — the attempted id is in the
+            // log, never in the response. The password is never logged.
+            _securityLogger.LogWarning("Security event {SecurityEvent}: login failed for employee id {EmployeeId} from {ClientIp}",
+                SecurityEvents.LoginFailed, request.EmployeeId, clientIp);
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid employee id or password.");
         }
+
+        _securityLogger.LogInformation("Security event {SecurityEvent}: employee {EmployeeId} logged in from {ClientIp}",
+            SecurityEvents.LoginSucceeded, employee.Id, clientIp);
 
         var signingKey = _jwtSettings.SigningKey;
         var issuer = _jwtSettings.Issuer;

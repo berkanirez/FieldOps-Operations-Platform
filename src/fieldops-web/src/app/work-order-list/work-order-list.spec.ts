@@ -32,12 +32,12 @@ describe('WorkOrderList', () => {
       expect(fixture.componentInstance).toBeTruthy();
     });
 
-    it('should request the real endpoint with the demo organization/employee headers', () => {
+    it('should request the real endpoint without identity headers (the JWT carries identity)', () => {
       fixture.detectChanges();
       const request = httpMock.expectOne('/api/workorders');
       expect(request.request.method).toBe('GET');
-      expect(request.request.headers.get('X-Organization-Id')).toBe('1');
-      expect(request.request.headers.get('X-Employee-Id')).toBe('1');
+      expect(request.request.headers.has('X-Organization-Id')).toBe(false);
+      expect(request.request.headers.has('X-Employee-Id')).toBe(false);
       request.flush([]);
     });
 
