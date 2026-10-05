@@ -65,7 +65,7 @@ Tear down with `docker compose down`.
 
 ### Seeded demo identities
 
-Requests identify the caller with an `X-Organization-Id` header and, for employee actions, an `X-Employee-Id` header (or `X-Customer-Id` for customer approval).
+Employees log in with their id and password and send the returned JWT as a bearer token; the API takes the caller's organization and role from the token. Every seeded employee has the **local demo password `FieldOps-Demo-2026!`** — for local development only; never deploy the seed data with it. Customer approval still identifies the customer with an `X-Customer-Id` header (customers cannot log in yet).
 
 | Organization | Employee (Admin) | Employee (Member) | Customer |
 |---|---|---|---|
@@ -75,12 +75,17 @@ Requests identify the caller with an `X-Organization-Id` header and, for employe
 Example:
 
 ```
+TOKEN=$(curl -s -X POST http://localhost:5190/api/auth/login -H "Content-Type: application/json" \
+  -d '{"employeeId":1,"password":"FieldOps-Demo-2026!"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+
 curl -X POST http://localhost:5190/api/workorders \
-  -H "X-Organization-Id: 1" -H "X-Employee-Id: 1" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"Title":"Fix the HVAC unit"}'
 
-curl http://localhost:5190/api/workorders/report -H "X-Organization-Id: 1" -H "X-Employee-Id: 1"
+curl http://localhost:5190/api/workorders/report -H "Authorization: Bearer $TOKEN"
 ```
+
+Login is rate limited (5 attempts per minute per client address) and returns the same 401 for an unknown employee and a wrong password.
 
 ### Angular frontend (`src/fieldops-web`)
 
@@ -177,7 +182,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 A security self-review against the OWASP Top 10, with reproducible evidence and a prioritized fix plan, is in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
-* Every API endpoint requires a JWT (except login, health checks and customer approval). Work-order endpoints take the caller's identity from the token; the Employees, Organizations and Billing controllers still read `X-Organization-Id` / `X-Employee-Id` headers (with a token required). Login takes only an employee id (no password), and role-based hiding in the frontend is a UI convenience, not authorization.
+* Every API endpoint requires a JWT (except login, health checks and customer approval). Work-order endpoints take the caller's identity from the token; the Employees, Organizations and Billing controllers still read `X-Organization-Id` / `X-Employee-Id` headers (with a token required). Passwords are stored as PBKDF2 hashes, but there is no password policy beyond a minimum length, no reset, lockout or MFA, and the login rate limit needs forwarded-header configuration behind a reverse proxy. Role-based hiding in the frontend is a UI convenience, not authorization.
 * The demo JWT signing key is in `appsettings.Development.json` (development only); outside Development the API refuses to start unless `Jwt__SigningKey` is supplied.
 * The AI provider is a deterministic fake; evidence "attachments" are plain text notes.
 * In Kubernetes, the API's dependencies (SQL Server, Redis, RabbitMQ, Elasticsearch) still run outside the cluster under Docker Compose, and the notification service is not deployed to the cluster yet.

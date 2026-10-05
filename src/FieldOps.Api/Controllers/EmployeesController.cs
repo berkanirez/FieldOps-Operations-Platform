@@ -126,7 +126,7 @@ public class EmployeesController : ControllerBase
         // EmployeeApplicationService (Day 34) — this action's only job is
         // translating that plain result into an HTTP response. organizationId
         // now comes from the header, never from the request body (Day 35).
-        var result = _employeeApplicationService.CreateEmployee(request.Name, organizationId.Value);
+        var result = _employeeApplicationService.CreateEmployee(request.Name, organizationId.Value, request.Password);
         if (!result.Succeeded)
         {
             return BadRequest(result.Error);

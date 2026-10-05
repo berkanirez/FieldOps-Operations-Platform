@@ -15,5 +15,10 @@ public interface IEmployeeDirectory
     // thread-pool thread (Day 117 measured thread-pool starvation).
     Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken);
 
-    EmployeeSummary Create(string name, int organizationId, EmployeeRole role);
+    // Day 122: passwordHash is produced by the host; this module only stores
+    // it. It is deliberately not part of EmployeeSummary, so a hash never
+    // travels with ordinary employee data (lists, DTOs, logs).
+    EmployeeSummary Create(string name, int organizationId, EmployeeRole role, string passwordHash);
+
+    Task<string?> GetPasswordHashAsync(int id, CancellationToken cancellationToken);
 }

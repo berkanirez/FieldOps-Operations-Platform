@@ -267,13 +267,22 @@ builder.Services.AddHostedService<OutboxPublisher>();
 // business code" pattern Day 48 established for connection strings.
 var rateLimitPermitLimit = builder.Configuration.GetValue("RateLimiting:PerOrganization:PermitLimit", 5);
 var rateLimitWindowSeconds = builder.Configuration.GetValue("RateLimiting:PerOrganization:WindowSeconds", 10);
+var loginPermitLimit = builder.Configuration.GetValue("RateLimiting:Login:PermitLimit", 5);
+var loginWindowSeconds = builder.Configuration.GetValue("RateLimiting:Login:WindowSeconds", 60);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // Day 122 (SECURITY_REVIEW.md F5/F6, and a regression introduced on
+    // Day 121): partitioned by the organization in the VALIDATED token, not
+    // the X-Organization-Id header. The header could be rewritten ("01") to
+    // get a fresh bucket, forged to spend another tenant's quota — and since
+    // Day 121 clients no longer need to send it at all, so every request
+    // without it shared one global "unknown" bucket. UseRateLimiter now runs
+    // after UseAuthentication so the claims are available here.
     options.AddPolicy("PerOrganization", httpContext =>
     {
-        var organizationId = httpContext.Request.Headers["X-Organization-Id"].FirstOrDefault() ?? "unknown";
+        var organizationId = httpContext.User.GetOrganizationId()?.ToString() ?? "anonymous";
         return RateLimitPartition.GetFixedWindowLimiter(organizationId, _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = rateLimitPermitLimit,
@@ -281,7 +290,24 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0
         });
     });
+
+    // Day 122 (SECURITY_REVIEW.md F7): login attempts per client IP address
+    // (no token exists yet at login). Behind a reverse proxy every request
+    // arrives from the proxy's address, so production needs the forwarded-
+    // headers middleware configured with the known proxies first — otherwise
+    // this becomes one shared bucket for all users.
+    options.AddPolicy("Login", httpContext =>
+    {
+        var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(clientIp, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = loginPermitLimit,
+            Window = TimeSpan.FromSeconds(loginWindowSeconds),
+            QueueLimit = 0
+        });
+    });
 });
+builder.Services.AddSingleton<EmployeePasswordHasher>();
 
 // Day 56: health checks — liveness ("is the process even running," no
 // dependency touched, cheap and instant) vs. readiness ("can this instance
@@ -345,14 +371,19 @@ app.UseHttpsRedirection();
 // (OPTIONS) request is answered correctly before reaching any endpoint.
 app.UseCors("AngularDev");
 
-app.UseRateLimiter();
-
 // Day 93: must run before UseAuthorization so a bearer token (once something
 // actually requires one) is validated and its claims attached to the
 // request before any authorization check runs.
 app.UseAuthentication();
 
 app.UseAuthorization();
+
+// Day 122: moved after authentication/authorization — the "PerOrganization"
+// policy partitions by the token's organization claim, and requests rejected
+// as unauthenticated never reach the limiter, so they can't spend anyone's
+// quota (SECURITY_REVIEW.md F6). Login is anonymous, so its own policy
+// still applies.
+app.UseRateLimiter();
 
 // Day 58: the framework's default health check response is just the bare
 // word "Healthy"/"Unhealthy" — no way to tell WHICH check failed. A JSON

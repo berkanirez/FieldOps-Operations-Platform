@@ -83,6 +83,11 @@ public class FieldOpsApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         // actual 429 threshold is verified live, not by an automated test.
         builder.UseSetting("RateLimiting:PerOrganization:PermitLimit", "100000");
 
+        // Day 122: every authenticated test logs in, all from the same test
+        // client "address" — the real login limit (5 per minute) is verified
+        // by its own dedicated test, not by accidentally tripping it here.
+        builder.UseSetting("RateLimiting:Login:PermitLimit", "100000");
+
         // Day 116: no Redis in this test environment (same stance as the
         // RabbitMQ/Elasticsearch no-ops below) — pinned to an address where
         // nothing listens, with short timeouts, so every run behaves the same

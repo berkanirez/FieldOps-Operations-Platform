@@ -4,6 +4,7 @@ using System.Text;
 using FieldOps.Api.Application;
 using FieldOps.Api.Models;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using FieldOps.Modules.Employees;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -28,25 +29,36 @@ public class AuthController : ControllerBase
 {
     private readonly IEmployeeDirectory _employeeDirectory;
     private readonly JwtSettings _jwtSettings;
+    private readonly EmployeePasswordHasher _passwordHasher;
 
-    public AuthController(IEmployeeDirectory employeeDirectory, JwtSettings jwtSettings)
+    // Day 122: a valid hash of a random value, verified when the employee
+    // doesn't exist so that path costs the same PBKDF2 work as a wrong
+    // password — otherwise the response time alone would reveal which
+    // employee ids exist (a timing side channel).
+    private static readonly string TimingEqualizerHash = new EmployeePasswordHasher().Hash(Guid.NewGuid().ToString());
+
+    public AuthController(IEmployeeDirectory employeeDirectory, JwtSettings jwtSettings, EmployeePasswordHasher passwordHasher)
     {
         _employeeDirectory = employeeDirectory;
         _jwtSettings = jwtSettings;
+        _passwordHasher = passwordHasher;
     }
 
+    // Day 122 (SECURITY_REVIEW.md F2 + F7): the password is verified against
+    // the stored hash. An unknown employee and a wrong password get the SAME
+    // 401 response (no "employee does not exist" — that enabled enumeration),
+    // and login is rate limited per client ("Login" policy in Program.cs).
     [HttpPost("login")]
-    public ActionResult<LoginResponse> Login(LoginRequest request)
+    [EnableRateLimiting("Login")]
+    public async Task<ActionResult<LoginResponse>> Login(LoginRequest request, CancellationToken cancellationToken)
     {
-        // Day 93's one real simplification, stated plainly: no password or
-        // any other credential is checked here — knowing a valid EmployeeId
-        // is treated as sufficient "proof" for this demo. A real login would
-        // verify a hashed password (or delegate to a real identity provider)
-        // before ever reaching the point of issuing a token.
-        var employee = _employeeDirectory.GetById(request.EmployeeId);
-        if (employee is null)
+        var employee = await _employeeDirectory.GetByIdAsync(request.EmployeeId, cancellationToken);
+        var passwordHash = employee is null ? null : await _employeeDirectory.GetPasswordHashAsync(employee.Id, cancellationToken);
+
+        var passwordMatches = _passwordHasher.Verify(passwordHash ?? TimingEqualizerHash, request.Password);
+        if (employee is null || passwordHash is null || !passwordMatches)
         {
-            return NotFound($"Employee {request.EmployeeId} does not exist.");
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid employee id or password.");
         }
 
         var signingKey = _jwtSettings.SigningKey;

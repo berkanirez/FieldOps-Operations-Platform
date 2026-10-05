@@ -12,6 +12,12 @@ internal class Employee
     public int OrganizationId { get; set; }
     public EmployeeRole Role { get; set; }
 
+    // Day 122 (SECURITY_REVIEW.md F2): the employee's password, hashed by the
+    // host before it ever reaches this module — this module stores the hash
+    // as an opaque string and never sees a plain password or knows the
+    // hashing algorithm. Null means "cannot log in".
+    public string? PasswordHash { get; set; }
+
     public Employee(string name, int organizationId, EmployeeRole role)
     {
         Name = name;

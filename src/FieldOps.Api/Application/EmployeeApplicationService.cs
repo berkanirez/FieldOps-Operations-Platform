@@ -15,14 +15,18 @@ public class EmployeeApplicationService
 {
     private readonly IEmployeeDirectory _employeeDirectory;
     private readonly IOrganizationDirectory _organizationDirectory;
+    private readonly EmployeePasswordHasher _passwordHasher;
 
-    public EmployeeApplicationService(IEmployeeDirectory employeeDirectory, IOrganizationDirectory organizationDirectory)
+    public EmployeeApplicationService(IEmployeeDirectory employeeDirectory, IOrganizationDirectory organizationDirectory, EmployeePasswordHasher passwordHasher)
     {
         _employeeDirectory = employeeDirectory;
         _organizationDirectory = organizationDirectory;
+        _passwordHasher = passwordHasher;
     }
 
-    public EmployeeCreationResult CreateEmployee(string name, int organizationId)
+    // Day 122: a new employee needs a password to be able to log in; only
+    // its hash is passed on to the Employees module.
+    public EmployeeCreationResult CreateEmployee(string name, int organizationId, string password)
     {
         var organization = _organizationDirectory.GetById(organizationId);
         if (organization is null)
@@ -34,7 +38,7 @@ public class EmployeeApplicationService
         // creating a new Admin isn't supported yet (out of Day 37's scope).
         // Today's seeded Admins (InMemoryEmployeeDirectory) are the only
         // Admins that exist.
-        var employee = _employeeDirectory.Create(name, organizationId, EmployeeRole.Member);
+        var employee = _employeeDirectory.Create(name, organizationId, EmployeeRole.Member, _passwordHasher.Hash(password));
         return EmployeeCreationResult.Success(employee);
     }
 }

@@ -4,6 +4,10 @@
     <label for="employeeId">Employee Id</label>
     <input id="employeeId" type="number" formControlName="employeeId" />
   </div>
+  <div>
+    <label for="password">Password</label>
+    <input id="password" type="password" formControlName="password" autocomplete="current-password" />
+  </div>
 
   @if (errorMessage()) {
     <p>{{ errorMessage() }}</p>

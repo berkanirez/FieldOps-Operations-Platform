@@ -21,8 +21,9 @@ export class AuthService {
 
   constructor(private readonly http: HttpClient) {}
 
-  login(employeeId: number): Observable<LoginResponse> {
-    return this.http.post<LoginResponse>(`${this.apiBaseUrl}/login`, { employeeId }).pipe(
+  // Day 122: the API now verifies a password (SECURITY_REVIEW.md F2).
+  login(employeeId: number, password: string): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>(`${this.apiBaseUrl}/login`, { employeeId, password }).pipe(
       tap(response => {
         this.token.set(response.token);
         this.role.set(response.role);

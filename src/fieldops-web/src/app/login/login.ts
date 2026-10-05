@@ -12,6 +12,8 @@ import { AuthService } from '../auth.service';
 export class Login {
   protected readonly form = new FormGroup({
     employeeId: new FormControl<number | null>(null, { validators: [Validators.required] }),
+    // Day 122: required, like the employee id; nonNullable keeps its value a string.
+    password: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
   });
   protected readonly errorMessage = signal<string | null>(null);
 
@@ -24,11 +26,13 @@ export class Login {
     if (this.form.invalid) {
       return;
     }
-    const { employeeId } = this.form.getRawValue();
+    const { employeeId, password } = this.form.getRawValue();
     this.errorMessage.set(null);
-    this.authService.login(employeeId!).subscribe({
+    this.authService.login(employeeId!, password).subscribe({
       next: () => this.router.navigate(['/']),
-      error: () => this.errorMessage.set('Login failed — check the employee id.'),
+      // Day 122: deliberately doesn't say WHICH one was wrong — the API
+      // doesn't reveal that either (no employee enumeration).
+      error: () => this.errorMessage.set('Login failed — check the employee id and password.'),
     });
   }
 }

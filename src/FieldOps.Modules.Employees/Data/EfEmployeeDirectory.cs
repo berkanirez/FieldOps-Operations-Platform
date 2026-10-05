@@ -38,9 +38,17 @@ internal class EfEmployeeDirectory : IEmployeeDirectory
         return employee is null ? null : new EmployeeSummary(employee.Id, employee.Name, employee.OrganizationId, employee.Role);
     }
 
-    public EmployeeSummary Create(string name, int organizationId, EmployeeRole role)
+    public async Task<string?> GetPasswordHashAsync(int id, CancellationToken cancellationToken)
     {
-        var employee = new Employee(name, organizationId, role);
+        return await _dbContext.Employees
+            .Where(e => e.Id == id)
+            .Select(e => e.PasswordHash)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public EmployeeSummary Create(string name, int organizationId, EmployeeRole role, string passwordHash)
+    {
+        var employee = new Employee(name, organizationId, role) { PasswordHash = passwordHash };
         _dbContext.Employees.Add(employee);
         _dbContext.SaveChanges();
         return new EmployeeSummary(employee.Id, employee.Name, employee.OrganizationId, employee.Role);

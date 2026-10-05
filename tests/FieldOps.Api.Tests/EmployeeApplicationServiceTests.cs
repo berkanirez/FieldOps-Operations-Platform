@@ -15,16 +15,24 @@ public class EmployeeApplicationServiceTests
     [Fact]
     public void CreateEmployee_ExistingOrganization_ReturnsSuccessWithEmployee()
     {
+        var employeeDirectory = new FakeEmployeeDirectory();
+        var hasher = new EmployeePasswordHasher();
         var service = new EmployeeApplicationService(
-            new FakeEmployeeDirectory(),
-            new FakeOrganizationDirectory(existingOrganizationId: 1));
+            employeeDirectory,
+            new FakeOrganizationDirectory(existingOrganizationId: 1),
+            hasher);
 
-        var result = service.CreateEmployee("Jane Tech", 1);
+        var result = service.CreateEmployee("Jane Tech", 1, "a-long-enough-password");
 
         Assert.True(result.Succeeded);
         Assert.Null(result.Error);
         Assert.Equal("Jane Tech", result.Employee!.Name);
         Assert.Equal(1, result.Employee.OrganizationId);
+
+        // Day 122: the module receives a hash, never the password itself.
+        var storedHash = employeeDirectory.PasswordHashes[result.Employee.Id];
+        Assert.NotEqual("a-long-enough-password", storedHash);
+        Assert.True(hasher.Verify(storedHash, "a-long-enough-password"));
     }
 
     [Fact]
@@ -33,9 +41,10 @@ public class EmployeeApplicationServiceTests
         var employeeDirectory = new FakeEmployeeDirectory();
         var service = new EmployeeApplicationService(
             employeeDirectory,
-            new FakeOrganizationDirectory(existingOrganizationId: 1));
+            new FakeOrganizationDirectory(existingOrganizationId: 1),
+            new EmployeePasswordHasher());
 
-        var result = service.CreateEmployee("Ghost Employee", 999);
+        var result = service.CreateEmployee("Ghost Employee", 999, "a-long-enough-password");
 
         Assert.False(result.Succeeded);
         Assert.Null(result.Employee);
@@ -69,11 +78,17 @@ public class EmployeeApplicationServiceTests
 
         public Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken) => Task.FromResult(GetById(id));
 
-        public EmployeeSummary Create(string name, int organizationId, EmployeeRole role)
+        public Dictionary<int, string> PasswordHashes { get; } = new();
+
+        public EmployeeSummary Create(string name, int organizationId, EmployeeRole role, string passwordHash)
         {
             var summary = new EmployeeSummary(_nextId++, name, organizationId, role);
             _employees.Add(summary);
+            PasswordHashes[summary.Id] = passwordHash;
             return summary;
         }
+
+        public Task<string?> GetPasswordHashAsync(int id, CancellationToken cancellationToken) =>
+            Task.FromResult(PasswordHashes.TryGetValue(id, out var hash) ? hash : null);
     }
 }

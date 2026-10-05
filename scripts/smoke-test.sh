@@ -67,7 +67,10 @@ check "deep-link"     "/work-orders/1"          200 "<app-root"
 # F1/F3) — checked before logging in, while no token is set.
 check "auth-required" "/api/workorders/report"  401 ""
 # Log in as the demo organization 1 Admin (employee 1) and keep the token.
-check "login"         "/api/auth/login"         200 '"token"' POST '{"employeeId":1}'
+# Day 122: login requires a password — SMOKE_PASSWORD for a real environment;
+# the default is the documented local demo password.
+SMOKE_PASSWORD="${SMOKE_PASSWORD:-FieldOps-Demo-2026!}"
+check "login"         "/api/auth/login"         200 '"token"' POST "{\"employeeId\":1,\"password\":\"$SMOKE_PASSWORD\"}"
 TOKEN=$(sed -E 's/.*"token":"([^"]+)".*/\1/' <<<"$LAST_BODY")
 # Through nginx's /api proxy to the API and its database (Days 105-107).
 check "api+database"  "/api/organizations"      200 '"name"'

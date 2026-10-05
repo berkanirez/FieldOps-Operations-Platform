@@ -78,7 +78,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         var client = _factory.CreateClient();
         await client.AuthenticateAsAsync(1);
 
-        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist" });
+        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist", Password = TestAuth.DemoPassword });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -91,7 +91,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin
 
-        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist" });
+        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist", Password = TestAuth.DemoPassword });
         var dto = await response.Content.ReadFromJsonAsync<EmployeeDto>();
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -106,7 +106,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // seeded Org1 Member
 
-        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist" });
+        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist", Password = TestAuth.DemoPassword });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -123,7 +123,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin, targeting Org 2
 
-        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Cross-Org Injected Employee" });
+        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Cross-Org Injected Employee", Password = TestAuth.DemoPassword });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -139,7 +139,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         // target gets 403 before this org-existence check is ever reached.
         client.DefaultRequestHeaders.Add("X-Employee-Id", "5");
 
-        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Ghost Employee" });
+        var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Ghost Employee", Password = TestAuth.DemoPassword });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -157,7 +157,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
         org2Client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
         org2Client.DefaultRequestHeaders.Add("X-Employee-Id", "3"); // seeded Org2 Admin
 
-        var createResponse = await org1Client.PostAsJsonAsync("/api/employees", new { Name = $"Org1-Only-{uniqueSuffix}" });
+        var createResponse = await org1Client.PostAsJsonAsync("/api/employees", new { Name = $"Org1-Only-{uniqueSuffix}", Password = TestAuth.DemoPassword });
         createResponse.EnsureSuccessStatusCode();
 
         var org1Employees = await org1Client.GetFromJsonAsync<List<EmployeeDto>>("/api/employees");

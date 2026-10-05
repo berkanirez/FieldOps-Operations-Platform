@@ -413,7 +413,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/employees")
         {
-            Content = JsonContent.Create(new { Name = name })
+            Content = JsonContent.Create(new { Name = name, Password = TestAuth.DemoPassword })
         };
         request.Headers.Add("X-Organization-Id", "1");
         request.Headers.Add("X-Employee-Id", "1");

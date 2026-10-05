@@ -26,10 +26,10 @@ describe('AuthService', () => {
   });
 
   it('stores the token after a successful login', () => {
-    service.login(1).subscribe();
+    service.login(1, 'FieldOps-Demo-2026!').subscribe();
 
     const request = httpMock.expectOne('/api/auth/login');
-    expect(request.request.body).toEqual({ employeeId: 1 });
+    expect(request.request.body).toEqual({ employeeId: 1, password: 'FieldOps-Demo-2026!' });
     request.flush({ token: 'fake-token', employeeId: 1, organizationId: 1, role: 'Admin' });
 
     expect(service.isLoggedIn()).toBe(true);
@@ -37,7 +37,7 @@ describe('AuthService', () => {
   });
 
   it('isAdmin reflects the role returned by login', () => {
-    service.login(1).subscribe();
+    service.login(1, 'FieldOps-Demo-2026!').subscribe();
     httpMock
       .expectOne('/api/auth/login')
       .flush({ token: 'fake-token', employeeId: 1, organizationId: 1, role: 'Admin' });
@@ -45,7 +45,7 @@ describe('AuthService', () => {
   });
 
   it('isAdmin is false for a non-Admin role', () => {
-    service.login(2).subscribe();
+    service.login(2, 'FieldOps-Demo-2026!').subscribe();
     httpMock
       .expectOne('/api/auth/login')
       .flush({ token: 'fake-token', employeeId: 2, organizationId: 1, role: 'Member' });
