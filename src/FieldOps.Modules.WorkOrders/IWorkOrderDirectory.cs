@@ -7,8 +7,32 @@ namespace FieldOps.Modules.WorkOrders;
 // is the host's job (see FieldOps.Api's WorkOrdersController).
 public interface IWorkOrderDirectory
 {
-    IReadOnlyList<WorkOrderSummary> GetAll();
+    // Day 113: replaces GetAll(), which returned EVERY organization's work
+    // orders for callers to filter in memory — measured with 50,000 rows of
+    // another organization, every list/report request read all of them
+    // (SQL had no WHERE). Both queries below filter in SQL; there is
+    // deliberately no "get everything" method left to misuse.
+    IReadOnlyList<WorkOrderSummary> GetByOrganization(int organizationId);
+
+    // Day 115: the list endpoint's query — ordered by Id (paging without a
+    // fixed order can repeat or skip rows) and bounded, so the seek + lookup
+    // plan Day 114 measured stays cheap for any organization size.
+    // GetByOrganization above stays unbounded for the Admin-only search index
+    // rebuild, which genuinely needs every work order of the organization.
+    //
+    // Day 118: async — these three are the read path Day 117's load test
+    // exercises, where blocking I/O starved the thread pool.
+    Task<IReadOnlyList<WorkOrderSummary>> GetPageByOrganizationAsync(int organizationId, int page, int pageSize, CancellationToken cancellationToken);
+
+    // Counted by the database (GROUP BY Status) — only one row per status
+    // comes back, never the work orders themselves. A status with no work
+    // orders is simply absent from the dictionary.
+    Task<IReadOnlyDictionary<WorkOrderStatus, int>> GetStatusCountsAsync(int organizationId, CancellationToken cancellationToken);
+
+    // The write actions (Assign, Start, Complete, ...) still use the
+    // synchronous GetById below — converting the write path is a later step.
     WorkOrderSummary? GetById(int id);
+    Task<WorkOrderSummary?> GetByIdAsync(int id, CancellationToken cancellationToken);
 
     // Day 47: customerId is optional and, like organizationId, not
     // validated here — this module has no reference to
@@ -24,7 +48,11 @@ public interface IWorkOrderDirectory
     // known, then persists whatever opaque entries come back — in the SAME
     // transaction as the WorkOrder's own insert, so a crash between the two
     // writes leaves neither behind, never just one.
-    WorkOrderSummary Create(string title, int organizationId, int? customerId, Func<int, IReadOnlyList<OutboxEntry>> buildOutboxEntries);
+    //
+    // Day 119: Create, Assign, Start and Complete are async — the write flow
+    // the mixed load test exercises. Their synchronous versions are gone; the
+    // remaining write methods below are converted later.
+    Task<WorkOrderSummary> CreateAsync(string title, int organizationId, int? customerId, Func<int, IReadOnlyList<OutboxEntry>> buildOutboxEntries, CancellationToken cancellationToken);
 
     // Deliberately does NOT validate that employeeId refers to a real
     // Employee, or that it belongs to the same organization as this work
@@ -34,7 +62,7 @@ public interface IWorkOrderDirectory
     // about a WorkOrder's own state, so this module enforces it itself
     // rather than trusting the host to remember. Returns null if no work
     // order with this id exists, or if it isn't currently Open.
-    WorkOrderSummary? Assign(int workOrderId, int employeeId);
+    Task<WorkOrderSummary?> AssignAsync(int workOrderId, int employeeId, CancellationToken cancellationToken);
 
     // Day 42: neither of these takes an employeeId. Unlike Assign (a
     // cross-module fact — is this employee real, is it in the right
@@ -45,7 +73,7 @@ public interface IWorkOrderDirectory
     // own state-machine invariant: Start requires Assigned, Complete
     // requires InProgress. Returns null if the work order doesn't exist or
     // isn't in the required prior state.
-    WorkOrderSummary? Start(int workOrderId);
+    Task<WorkOrderSummary?> StartAsync(int workOrderId, CancellationToken cancellationToken);
 
     // Day 71: outboxEntries are opaque to this module — it never interprets
     // them, just persists them in the SAME SaveChanges call as the Status
@@ -58,7 +86,7 @@ public interface IWorkOrderDirectory
     // Day 80: a plain list here (not Create's callback above) — Complete
     // acts on a WorkOrder that already exists, with an already-known Id, so
     // there's no generated value the host needs to wait for.
-    WorkOrderSummary? Complete(int workOrderId, IReadOnlyList<OutboxEntry> outboxEntries);
+    Task<WorkOrderSummary?> CompleteAsync(int workOrderId, IReadOnlyList<OutboxEntry> outboxEntries, CancellationToken cancellationToken);
 
     // Day 43: changes WHO is assigned without changing Status — unlike
     // Assign (Open -> Assigned), Reassign only makes sense while a work

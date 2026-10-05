@@ -16,9 +16,42 @@ internal class EfWorkOrderDirectory : IWorkOrderDirectory
         _dbContext = dbContext;
     }
 
-    public IReadOnlyList<WorkOrderSummary> GetAll()
+    // Day 113: Where runs BEFORE ToList, on IQueryable, so EF Core turns it
+    // into "WHERE [w].[OrganizationId] = @organizationId" — only this
+    // organization's rows ever leave the database.
+    public IReadOnlyList<WorkOrderSummary> GetByOrganization(int organizationId)
     {
-        return _dbContext.WorkOrders.Select(ToSummary).ToList();
+        return _dbContext.WorkOrders
+            .Where(w => w.OrganizationId == organizationId)
+            .Select(ToSummary)
+            .ToList();
+    }
+
+    // Day 115: OrderBy + Skip + Take on IQueryable become
+    // "ORDER BY [w].[Id] OFFSET @skip ROWS FETCH NEXT @take ROWS ONLY".
+    // Day 118: ToListAsync — same SQL, but the thread goes back to the pool
+    // while the query runs; cancellationToken aborts it if the caller leaves.
+    public async Task<IReadOnlyList<WorkOrderSummary>> GetPageByOrganizationAsync(int organizationId, int pageNumber, int pageSize, CancellationToken cancellationToken)
+    {
+        // ToSummary is a method group, so .Select(ToSummary) would bind to the
+        // in-memory Enumerable.Select (no async there): fetch the page
+        // asynchronously first, then map in memory — the SQL is unchanged.
+        var page = await _dbContext.WorkOrders
+            .Where(w => w.OrganizationId == organizationId)
+            .OrderBy(w => w.Id)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+        return page.Select(ToSummary).ToList();
+    }
+
+    public async Task<IReadOnlyDictionary<WorkOrderStatus, int>> GetStatusCountsAsync(int organizationId, CancellationToken cancellationToken)
+    {
+        return await _dbContext.WorkOrders
+            .Where(w => w.OrganizationId == organizationId)
+            .GroupBy(w => w.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count, cancellationToken);
     }
 
     public WorkOrderSummary? GetById(int id)
@@ -27,7 +60,13 @@ internal class EfWorkOrderDirectory : IWorkOrderDirectory
         return workOrder is null ? null : ToSummary(workOrder);
     }
 
-    public WorkOrderSummary Create(string title, int organizationId, int? customerId, Func<int, IReadOnlyList<OutboxEntry>> buildOutboxEntries)
+    public async Task<WorkOrderSummary?> GetByIdAsync(int id, CancellationToken cancellationToken)
+    {
+        var workOrder = await _dbContext.WorkOrders.FirstOrDefaultAsync(w => w.Id == id, cancellationToken);
+        return workOrder is null ? null : ToSummary(workOrder);
+    }
+
+    public async Task<WorkOrderSummary> CreateAsync(string title, int organizationId, int? customerId, Func<int, IReadOnlyList<OutboxEntry>> buildOutboxEntries, CancellationToken cancellationToken)
     {
         // Day 80: an explicit transaction because this Create, unlike
         // Complete, genuinely needs TWO SaveChanges calls — the WorkOrder's
@@ -35,26 +74,43 @@ internal class EfWorkOrderDirectory : IWorkOrderDirectory
         // built from it must land in the SAME atomic unit as the WorkOrder
         // itself. Without this transaction, a crash between the two calls
         // could leave a WorkOrder that exists but will never be indexed.
-        using var transaction = _dbContext.Database.BeginTransaction();
-
-        var workOrder = new WorkOrder(title, organizationId, WorkOrderStatus.Open) { CustomerId = customerId };
-        _dbContext.WorkOrders.Add(workOrder);
-        _dbContext.SaveChanges();
-        // workOrder.Id is now populated by the database's IDENTITY column.
-
-        foreach (var entry in buildOutboxEntries(workOrder.Id))
+        //
+        // Day 111: with EnableRetryOnFailure, EF Core refuses a user-started
+        // transaction outright (proven live: InvalidOperationException) —
+        // retrying one SaveChanges in the middle of it could half-apply the
+        // unit. The execution strategy instead retries the WHOLE block:
+        // transaction, both saves, commit. Clearing the change tracker first
+        // matters on a retry: the previous attempt's WorkOrder and outbox
+        // rows are still tracked as Added, and would otherwise be inserted
+        // alongside the new attempt's — duplicates.
+        //
+        // Day 119: async — ExecuteAsync retries the whole async block exactly
+        // as Execute did; every step inside is awaited.
+        var strategy = _dbContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            _dbContext.OutboxMessages.Add(new OutboxMessage(entry.EventType, entry.Payload));
-        }
-        _dbContext.SaveChanges();
+            _dbContext.ChangeTracker.Clear();
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        transaction.Commit();
-        return ToSummary(workOrder);
+            var workOrder = new WorkOrder(title, organizationId, WorkOrderStatus.Open) { CustomerId = customerId };
+            _dbContext.WorkOrders.Add(workOrder);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            // workOrder.Id is now populated by the database's IDENTITY column.
+
+            foreach (var entry in buildOutboxEntries(workOrder.Id))
+            {
+                _dbContext.OutboxMessages.Add(new OutboxMessage(entry.EventType, entry.Payload));
+            }
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+            return ToSummary(workOrder);
+        });
     }
 
-    public WorkOrderSummary? Assign(int workOrderId, int employeeId)
+    public async Task<WorkOrderSummary?> AssignAsync(int workOrderId, int employeeId, CancellationToken cancellationToken)
     {
-        var workOrder = _dbContext.WorkOrders.FirstOrDefault(w => w.Id == workOrderId);
+        var workOrder = await _dbContext.WorkOrders.FirstOrDefaultAsync(w => w.Id == workOrderId, cancellationToken);
         if (workOrder is null || workOrder.Status != WorkOrderStatus.Open)
         {
             return null;
@@ -62,26 +118,26 @@ internal class EfWorkOrderDirectory : IWorkOrderDirectory
 
         workOrder.Status = WorkOrderStatus.Assigned;
         workOrder.AssignedEmployeeId = employeeId;
-        _dbContext.SaveChanges();
+        await _dbContext.SaveChangesAsync(cancellationToken);
         return ToSummary(workOrder);
     }
 
-    public WorkOrderSummary? Start(int workOrderId)
+    public async Task<WorkOrderSummary?> StartAsync(int workOrderId, CancellationToken cancellationToken)
     {
-        var workOrder = _dbContext.WorkOrders.FirstOrDefault(w => w.Id == workOrderId);
+        var workOrder = await _dbContext.WorkOrders.FirstOrDefaultAsync(w => w.Id == workOrderId, cancellationToken);
         if (workOrder is null || workOrder.Status != WorkOrderStatus.Assigned)
         {
             return null;
         }
 
         workOrder.Status = WorkOrderStatus.InProgress;
-        _dbContext.SaveChanges();
+        await _dbContext.SaveChangesAsync(cancellationToken);
         return ToSummary(workOrder);
     }
 
-    public WorkOrderSummary? Complete(int workOrderId, IReadOnlyList<OutboxEntry> outboxEntries)
+    public async Task<WorkOrderSummary?> CompleteAsync(int workOrderId, IReadOnlyList<OutboxEntry> outboxEntries, CancellationToken cancellationToken)
     {
-        var workOrder = _dbContext.WorkOrders.FirstOrDefault(w => w.Id == workOrderId);
+        var workOrder = await _dbContext.WorkOrders.FirstOrDefaultAsync(w => w.Id == workOrderId, cancellationToken);
         if (workOrder is null || workOrder.Status != WorkOrderStatus.InProgress)
         {
             return null;
@@ -101,7 +157,7 @@ internal class EfWorkOrderDirectory : IWorkOrderDirectory
             _dbContext.OutboxMessages.Add(new OutboxMessage(entry.EventType, entry.Payload));
         }
 
-        _dbContext.SaveChanges();
+        await _dbContext.SaveChangesAsync(cancellationToken);
         return ToSummary(workOrder);
     }
 

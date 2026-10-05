@@ -40,6 +40,18 @@ internal class WorkOrdersDbContext : DbContext
             // text-only stand-in for real file evidence (Day 46).
             entity.PrimitiveCollection(w => w.EvidenceNotes);
 
+            // Day 114: every list/report query filters by OrganizationId
+            // (Day 113). Without an index SQL Server read the whole table —
+            // measured: 1,674 pages to return organization 1's 2 rows out of
+            // 50,002. A single-column index helped only whichever organization
+            // ran first (parameter sniffing): planned for the small one, the
+            // cached plan cost the 50,000-row one 150,089 reads via per-row
+            // lookups. Status is included so the report's GROUP BY is answered
+            // from the index alone, with no lookups, for any organization size.
+            // The list still needs lookups for its other columns — bounded only
+            // once it is paginated. Small cost on every insert.
+            entity.HasIndex(w => new { w.OrganizationId, w.Status });
+
             // No HasData — WorkOrders started empty in-memory (Day 40, no
             // bootstrap problem the way Employees had) and stays empty here.
         });

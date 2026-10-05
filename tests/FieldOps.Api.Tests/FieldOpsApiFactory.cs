@@ -83,6 +83,16 @@ public class FieldOpsApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         // actual 429 threshold is verified live, not by an automated test.
         builder.UseSetting("RateLimiting:PerOrganization:PermitLimit", "100000");
 
+        // Day 116: no Redis in this test environment (same stance as the
+        // RabbitMQ/Elasticsearch no-ops below) — pinned to an address where
+        // nothing listens, with short timeouts, so every run behaves the same
+        // whether or not a developer happens to have Redis on localhost:6379.
+        // Program.cs's BacklogPolicy.FailFast is what removed the 37-minute
+        // suite (verified without this line); this only makes it deterministic.
+        builder.UseSetting(
+            "Redis:ConnectionString",
+            "localhost:1,abortConnect=false,connectTimeout=200,syncTimeout=200,asyncTimeout=200");
+
         // Day 67: real, live-caught test-suite slowdown — every test calling
         // Complete now tries to open a genuine RabbitMQ connection, which
         // has no chance of succeeding here (no RabbitMQ container in this

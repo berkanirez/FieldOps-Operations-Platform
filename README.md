@@ -140,7 +140,7 @@ cd src/fieldops-web && npx ng test # frontend: unit tests (Vitest)
 
 ### Azure deployment
 
-A demo deployment on **Azure Container Apps**, using the images CI publishes to GHCR:
+FieldOps was deployed to **Azure Container Apps** as a demo (October 2026), using the images CI publishes to GHCR, then torn down at the end of the free trial. The setup:
 
 * **Frontend** (`fieldops-web`) — external HTTPS ingress, scales to zero when idle; `API_UPSTREAM=http://fieldops-api` points its nginx reverse proxy at the API.
 * **API** (`fieldops-api`) — **internal ingress only**: not reachable from the internet, only through the frontend's `/api`. Connection strings are Container Apps secrets.
@@ -161,6 +161,8 @@ az containerapp update --name fieldops-api --resource-group <rg> --image ghcr.io
 scripts/smoke-test.sh https://<frontend-app>.<environment>.azurecontainerapps.io
 ```
 
+The same script can be run from GitHub: **Actions → Smoke test → Run workflow** ([`.github/workflows/smoke-test.yml`](.github/workflows/smoke-test.yml)) takes the URL as input and fails the job when any check fails.
+
 Logs from the containers go to a Log Analytics workspace (queryable with KQL), and Container Apps exposes request and replica metrics.
 
 ### CI/CD
@@ -179,7 +181,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 * In Kubernetes, the API's dependencies (SQL Server, Redis, RabbitMQ, Elasticsearch) still run outside the cluster under Docker Compose, and the notification service is not deployed to the cluster yet.
 * Migrations are applied by hand rather than by a dedicated migration job.
 * Deployments to Azure are run by hand (`az containerapp update` followed by the smoke test) rather than by a CI/CD deploy step.
-* EF Core is not configured with transient-fault retries (`EnableRetryOnFailure`), so the first requests while an auto-paused Azure SQL database resumes can fail.
+* EF Core retries transient SQL failures (`EnableRetryOnFailure`) in the API's modules, but if a work-order create's commit succeeds and only the acknowledgement is lost, the retry inserts a duplicate — the `Idempotency-Key` header deduplicates client retries, not this server-side re-run (that would need a database-level check). The separate notification service does not retry yet.
 
 ---
 

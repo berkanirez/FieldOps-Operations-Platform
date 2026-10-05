@@ -9,5 +9,11 @@ public interface IEmployeeDirectory
 {
     IReadOnlyList<EmployeeSummary> GetAll();
     EmployeeSummary? GetById(int id);
+
+    // Day 118: every work-order request's membership check looks up the
+    // acting employee; on the async read path that lookup must not block a
+    // thread-pool thread (Day 117 measured thread-pool starvation).
+    Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken);
+
     EmployeeSummary Create(string name, int organizationId, EmployeeRole role);
 }

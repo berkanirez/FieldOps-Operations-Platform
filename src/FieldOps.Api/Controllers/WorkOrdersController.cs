@@ -60,38 +60,89 @@ public class WorkOrdersController : ControllerBase
     // FieldOps — now that WorkOrders is EF-backed (Day 48 earlier today),
     // this is a real SQL query every time, unlike everything before it,
     // which was reading from memory. Cache-aside via WorkOrderReportService.
+    // Day 118: the three reads below (report, list, get-by-id) are async end
+    // to end — Day 117's load test showed their blocking I/O starving the
+    // thread pool. ASP.NET Core passes a CancellationToken that fires when
+    // the client disconnects, so abandoned requests stop their queries.
     [HttpGet("report")]
-    public ActionResult<WorkOrderStatusReport> GetStatusReport(
+    public async Task<ActionResult<WorkOrderStatusReport>> GetStatusReport(
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var report = _workOrderReportService.GetStatusReport(organizationId!.Value);
+        var report = await _workOrderReportService.GetStatusReportAsync(organizationId!.Value, cancellationToken);
         return Ok(report);
     }
 
+    // Day 115: paged (defaults page 1, 50 per page, at most 100). The response
+    // stays a plain array so existing clients keep working; no total count yet.
+    private const int DefaultPageSize = 50;
+    private const int MaxPageSize = 100;
+
     [HttpGet]
-    public ActionResult<IReadOnlyList<WorkOrderDto>> GetAll(
+    public async Task<ActionResult<IReadOnlyList<WorkOrderDto>>> GetAll(
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = DefaultPageSize)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var workOrders = _workOrderDirectory.GetAll()
-            .Where(w => w.OrganizationId == organizationId)
+        if (page < 1)
+        {
+            ModelState.AddModelError(nameof(page), "page must be 1 or greater.");
+        }
+        if (pageSize < 1 || pageSize > MaxPageSize)
+        {
+            ModelState.AddModelError(nameof(pageSize), $"pageSize must be between 1 and {MaxPageSize}.");
+        }
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        var workOrders = (await _workOrderDirectory.GetPageByOrganizationAsync(organizationId!.Value, page, pageSize, cancellationToken))
             .Select(ToDto)
             .ToList();
 
         return Ok(workOrders);
+    }
+
+    // Day 115: the Angular detail page used to load the whole list and search
+    // it client-side; once the list is paged that would miss work orders
+    // beyond the first page. A work order of another organization returns
+    // 404, not 403 — a 403 would confirm that the id exists (IDOR).
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<WorkOrderDto>> GetById(
+        int id,
+        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken)
+    {
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
+        if (membershipError is not null)
+        {
+            return membershipError;
+        }
+
+        var workOrder = await _workOrderDirectory.GetByIdAsync(id, cancellationToken);
+        if (workOrder is null || workOrder.OrganizationId != organizationId)
+        {
+            return NotFound();
+        }
+
+        return Ok(ToDto(workOrder));
     }
 
     // Day 79: goes through IWorkOrderSearchIndex (Elasticsearch), never
@@ -133,20 +184,19 @@ public class WorkOrdersController : ControllerBase
         [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var adminError = ValidateIsAdmin(actingEmployeeId!.Value, "rebuild the search index for");
+        var adminError = await ValidateIsAdminAsync(actingEmployeeId!.Value, "rebuild the search index for", cancellationToken);
         if (adminError is not null)
         {
             return adminError;
         }
 
-        var documents = _workOrderDirectory.GetAll()
-            .Where(w => w.OrganizationId == organizationId)
+        var documents = _workOrderDirectory.GetByOrganization(organizationId!.Value)
             .Select(w => new WorkOrderSearchDocument(w.Id, w.OrganizationId, w.Title, w.Status))
             .ToList();
 
@@ -162,13 +212,18 @@ public class WorkOrdersController : ControllerBase
     // work order, capping their own possible frequency).
     [HttpPost]
     [EnableRateLimiting("PerOrganization")]
-    public ActionResult<WorkOrderDto> Create(
+    //
+    // Day 119: Create, Assign, Start and Complete are async end to end — the
+    // mixed load test showed their blocking I/O dragging read p95 from 31 ms
+    // to 980 ms, since reads and writes share one thread pool.
+    public async Task<ActionResult<WorkOrderDto>> Create(
         CreateWorkOrderRequest request,
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
         [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
-        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey)
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
@@ -182,7 +237,7 @@ public class WorkOrdersController : ControllerBase
         // required contract change.
         if (idempotencyKey is not null)
         {
-            var cachedResponse = _idempotencyService.TryGetCachedResponse(idempotencyKey);
+            var cachedResponse = await _idempotencyService.TryGetCachedResponseAsync(idempotencyKey);
             if (cachedResponse is not null)
             {
                 return StatusCode(StatusCodes.Status201Created, cachedResponse);
@@ -195,7 +250,7 @@ public class WorkOrdersController : ControllerBase
         // indistinguishable to the caller.
         if (request.CustomerId is not null)
         {
-            var customer = _customerDirectory.GetById(request.CustomerId.Value);
+            var customer = await _customerDirectory.GetByIdAsync(request.CustomerId.Value, cancellationToken);
             if (customer is null || customer.OrganizationId != organizationId)
             {
                 return BadRequest($"Customer {request.CustomerId} does not exist.");
@@ -209,11 +264,12 @@ public class WorkOrdersController : ControllerBase
         // shape exists because this WorkOrder's Id doesn't exist yet at
         // this point — IWorkOrderDirectory.Create calls it back with the
         // real, database-generated Id once it actually has one.
-        var workOrder = _workOrderDirectory.Create(request.Title, organizationId!.Value, request.CustomerId, newId =>
+        var workOrder = await _workOrderDirectory.CreateAsync(request.Title, organizationId!.Value, request.CustomerId, newId =>
             [new OutboxEntry(
                 nameof(WorkOrderSearchDocument),
-                JsonSerializer.Serialize(new WorkOrderSearchDocument(newId, organizationId!.Value, request.Title, WorkOrderStatus.Open)))]);
-        _workOrderReportService.InvalidateCache(organizationId.Value);
+                JsonSerializer.Serialize(new WorkOrderSearchDocument(newId, organizationId!.Value, request.Title, WorkOrderStatus.Open)))],
+            cancellationToken);
+        await _workOrderReportService.InvalidateCacheAsync(organizationId.Value);
         var dto = ToDto(workOrder);
 
         // Only the success path is remembered — a validation failure (the
@@ -222,7 +278,7 @@ public class WorkOrdersController : ControllerBase
         // effect, not get a replayed failure forever.
         if (idempotencyKey is not null)
         {
-            _idempotencyService.StoreResponse(idempotencyKey, dto);
+            await _idempotencyService.StoreResponseAsync(idempotencyKey, dto);
         }
 
         return StatusCode(StatusCodes.Status201Created, dto);
@@ -233,32 +289,33 @@ public class WorkOrdersController : ControllerBase
     // "should any Member be able to assign any work order" isn't genuinely
     // ambiguous, so this reuses Create's Day 37 Admin-only precedent directly.
     [HttpPost("{id}/assign")]
-    public ActionResult<WorkOrderDto> Assign(
+    public async Task<ActionResult<WorkOrderDto>> Assign(
         int id,
         AssignWorkOrderRequest request,
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var adminError = ValidateIsAdmin(actingEmployeeId!.Value, "assign");
+        var adminError = await ValidateIsAdminAsync(actingEmployeeId!.Value, "assign", cancellationToken);
         if (adminError is not null)
         {
             return adminError;
         }
 
-        var result = _workOrderAssignmentService.AssignWorkOrder(id, request.EmployeeId, organizationId!.Value);
+        var result = await _workOrderAssignmentService.AssignWorkOrderAsync(id, request.EmployeeId, organizationId!.Value, cancellationToken);
         if (!result.Succeeded)
         {
             return BadRequest(result.Error);
         }
 
-        _workOrderReportService.InvalidateCache(organizationId!.Value);
-        _auditLogWriter.Record(organizationId!.Value, id, "Assigned", "Employee", actingEmployeeId!.Value);
+        await _workOrderReportService.InvalidateCacheAsync(organizationId!.Value);
+        await _auditLogWriter.RecordAsync(organizationId!.Value, id, "Assigned", "Employee", actingEmployeeId!.Value);
         return Ok(ToDto(result.WorkOrder!));
     }
 
@@ -383,30 +440,31 @@ public class WorkOrdersController : ControllerBase
     // here in the controller, not inside the module, using AssignedEmployeeId
     // — a field the module already exposes, no cross-module lookup needed.
     [HttpPost("{id}/start")]
-    public ActionResult<WorkOrderDto> Start(
+    public async Task<ActionResult<WorkOrderDto>> Start(
         int id,
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var ownershipError = ValidateOwnership(id, organizationId, actingEmployeeId, out _);
+        var (ownershipError, _) = await ValidateOwnershipAsync(id, organizationId, actingEmployeeId, cancellationToken);
         if (ownershipError is not null)
         {
             return ownershipError;
         }
 
-        var updated = _workOrderDirectory.Start(id);
+        var updated = await _workOrderDirectory.StartAsync(id, cancellationToken);
         if (updated is null)
         {
             return BadRequest($"Work order {id} must be Assigned before it can be started.");
         }
 
-        _workOrderReportService.InvalidateCache(organizationId!.Value);
+        await _workOrderReportService.InvalidateCacheAsync(organizationId!.Value);
         return Ok(ToDto(updated));
     }
 
@@ -417,18 +475,19 @@ public class WorkOrdersController : ControllerBase
     // SAME outbox mechanism, so this is synchronous again — indexing no
     // longer happens inside this request at all.
     [HttpPost("{id}/complete")]
-    public ActionResult<WorkOrderDto> Complete(
+    public async Task<ActionResult<WorkOrderDto>> Complete(
         int id,
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
+        CancellationToken cancellationToken)
     {
-        var membershipError = ValidateMembership(organizationId, actingEmployeeId);
+        var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
             return membershipError;
         }
 
-        var ownershipError = ValidateOwnership(id, organizationId, actingEmployeeId, out var workOrderBeforeCompletion);
+        var (ownershipError, workOrderBeforeCompletion) = await ValidateOwnershipAsync(id, organizationId, actingEmployeeId, cancellationToken);
         if (ownershipError is not null)
         {
             return ownershipError;
@@ -447,17 +506,17 @@ public class WorkOrdersController : ControllerBase
         var indexPayload = JsonSerializer.Serialize(
             new WorkOrderSearchDocument(id, organizationId!.Value, workOrderBeforeCompletion.Title, WorkOrderStatus.Completed));
 
-        var updated = _workOrderDirectory.Complete(id, [
+        var updated = await _workOrderDirectory.CompleteAsync(id, [
             new OutboxEntry(nameof(WorkOrderCompletedEvent), eventPayload),
             new OutboxEntry(nameof(WorkOrderSearchDocument), indexPayload)
-        ]);
+        ], cancellationToken);
         if (updated is null)
         {
             return BadRequest($"Work order {id} must be InProgress before it can be completed.");
         }
 
-        _workOrderReportService.InvalidateCache(organizationId!.Value);
-        _auditLogWriter.Record(organizationId!.Value, id, "Completed", "Employee", actingEmployeeId!.Value);
+        await _workOrderReportService.InvalidateCacheAsync(organizationId!.Value);
+        await _auditLogWriter.RecordAsync(organizationId!.Value, id, "Completed", "Employee", actingEmployeeId!.Value);
 
         // Day 86: incremented only on the genuine success path — the same
         // "only count it once the real thing happened" discipline as every
@@ -599,7 +658,7 @@ public class WorkOrdersController : ControllerBase
     // one now has a single caller again — kept as its own named method
     // anyway since "Assign is Admin-only" is a real, standalone business
     // rule worth naming, not just inlined into Assign's action body.
-    private ActionResult? ValidateIsAdmin(int actingEmployeeId, string action)
+    private async Task<ActionResult?> ValidateIsAdminAsync(int actingEmployeeId, string action, CancellationToken cancellationToken)
     {
         // ValidateMembership already looked this employee up once — looked
         // up again here since only Assign needs the role, and adding an
@@ -607,7 +666,9 @@ public class WorkOrdersController : ControllerBase
         // would complicate a helper the other actions don't need changed.
         // A real, negligible cost against an in-memory list; worth
         // revisiting once a real database makes lookups non-free.
-        var actingEmployee = _employeeDirectory.GetById(actingEmployeeId)!;
+        // Day 119: async (Assign, its only caller, is async now). The second
+        // lookup is now a real database round trip — noted, not changed today.
+        var actingEmployee = (await _employeeDirectory.GetByIdAsync(actingEmployeeId, cancellationToken))!;
         if (actingEmployee.Role != EmployeeRole.Admin)
         {
             return StatusCode(StatusCodes.Status403Forbidden, $"Only an Admin can {action} work orders.");
@@ -668,12 +729,32 @@ public class WorkOrdersController : ControllerBase
     // for me" generic-message pattern as Day 41's Assign (a work order that
     // doesn't exist and one belonging to another organization are
     // indistinguishable), plus the new ownership check.
+    //
+    // Day 119: an async method can't have an out parameter, so the async
+    // version returns (error, workOrder) as a tuple; both versions share the
+    // rule in CheckOwnership. The sync one remains for AddEvidence.
     private ActionResult? ValidateOwnership(int workOrderId, int? organizationId, int? actingEmployeeId, out WorkOrderSummary? workOrder)
     {
         workOrder = _workOrderDirectory.GetById(workOrderId);
-        if (workOrder is null || workOrder.OrganizationId != organizationId)
+        var error = CheckOwnership(workOrderId, organizationId, actingEmployeeId, workOrder);
+        if (error is not null)
         {
             workOrder = null;
+        }
+        return error;
+    }
+
+    private async Task<(ActionResult? Error, WorkOrderSummary? WorkOrder)> ValidateOwnershipAsync(int workOrderId, int? organizationId, int? actingEmployeeId, CancellationToken cancellationToken)
+    {
+        var workOrder = await _workOrderDirectory.GetByIdAsync(workOrderId, cancellationToken);
+        var error = CheckOwnership(workOrderId, organizationId, actingEmployeeId, workOrder);
+        return (error, error is null ? workOrder : null);
+    }
+
+    private ActionResult? CheckOwnership(int workOrderId, int? organizationId, int? actingEmployeeId, WorkOrderSummary? workOrder)
+    {
+        if (workOrder is null || workOrder.OrganizationId != organizationId)
+        {
             return BadRequest($"Work order {workOrderId} does not exist.");
         }
 
@@ -696,7 +777,20 @@ public class WorkOrdersController : ControllerBase
     // (EmployeesController.Create's extra role check is what made its two
     // call sites non-identical). Extracting here avoids writing the same
     // three checks twice within a single new file.
-    private ActionResult? ValidateMembership(int? organizationId, int? actingEmployeeId)
+    //
+    // Day 118: two entry points — the synchronous one for the write actions
+    // (still synchronous for now) and an async one for the async reads. They
+    // differ only in how the acting employee is fetched; the rules themselves
+    // live once, in MissingHeaders and CheckMembership.
+    private ActionResult? ValidateMembership(int? organizationId, int? actingEmployeeId) =>
+        MissingHeaders(organizationId, actingEmployeeId)
+        ?? CheckMembership(organizationId!.Value, actingEmployeeId!.Value, _employeeDirectory.GetById(actingEmployeeId.Value));
+
+    private async Task<ActionResult?> ValidateMembershipAsync(int? organizationId, int? actingEmployeeId, CancellationToken cancellationToken) =>
+        MissingHeaders(organizationId, actingEmployeeId)
+        ?? CheckMembership(organizationId!.Value, actingEmployeeId!.Value, await _employeeDirectory.GetByIdAsync(actingEmployeeId.Value, cancellationToken));
+
+    private ActionResult? MissingHeaders(int? organizationId, int? actingEmployeeId)
     {
         if (organizationId is null)
         {
@@ -708,7 +802,11 @@ public class WorkOrdersController : ControllerBase
             return BadRequest("X-Employee-Id header is required.");
         }
 
-        var actingEmployee = _employeeDirectory.GetById(actingEmployeeId.Value);
+        return null;
+    }
+
+    private ActionResult? CheckMembership(int organizationId, int actingEmployeeId, EmployeeSummary? actingEmployee)
+    {
         if (actingEmployee is null)
         {
             return BadRequest($"Employee {actingEmployeeId} does not exist.");

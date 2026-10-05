@@ -28,11 +28,14 @@ public class IdempotencyService
     // blip here must never block a genuinely new request. Worst case, a
     // retried request gets processed twice instead of being deduplicated —
     // safe-by-default ("fail open"), not a data-corrupting failure.
-    public WorkOrderDto? TryGetCachedResponse(string idempotencyKey)
+    //
+    // Day 119: async (StringGetAsync/StringSetAsync) — Create, its only
+    // caller, is async now.
+    public async Task<WorkOrderDto?> TryGetCachedResponseAsync(string idempotencyKey)
     {
         try
         {
-            var cached = _redis.GetDatabase().StringGet($"idempotency:{idempotencyKey}");
+            var cached = await _redis.GetDatabase().StringGetAsync($"idempotency:{idempotencyKey}");
             return cached.HasValue ? JsonSerializer.Deserialize<WorkOrderDto>((string)cached!) : null;
         }
         catch (Exception ex)
@@ -42,11 +45,11 @@ public class IdempotencyService
         }
     }
 
-    public void StoreResponse(string idempotencyKey, WorkOrderDto response)
+    public async Task StoreResponseAsync(string idempotencyKey, WorkOrderDto response)
     {
         try
         {
-            _redis.GetDatabase().StringSet($"idempotency:{idempotencyKey}", JsonSerializer.Serialize(response), RecordDuration);
+            await _redis.GetDatabase().StringSetAsync($"idempotency:{idempotencyKey}", JsonSerializer.Serialize(response), RecordDuration);
         }
         catch (Exception ex)
         {

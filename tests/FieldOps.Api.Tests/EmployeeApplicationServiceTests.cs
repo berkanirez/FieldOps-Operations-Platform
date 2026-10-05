@@ -67,6 +67,8 @@ public class EmployeeApplicationServiceTests
 
         public EmployeeSummary? GetById(int id) => _employees.FirstOrDefault(e => e.Id == id);
 
+        public Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken) => Task.FromResult(GetById(id));
+
         public EmployeeSummary Create(string name, int organizationId, EmployeeRole role)
         {
             var summary = new EmployeeSummary(_nextId++, name, organizationId, role);

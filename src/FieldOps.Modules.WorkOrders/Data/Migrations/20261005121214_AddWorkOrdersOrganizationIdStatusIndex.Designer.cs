@@ -4,6 +4,7 @@ using FieldOps.Modules.WorkOrders.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FieldOps.Modules.WorkOrders.Data.Migrations
 {
     [DbContext(typeof(WorkOrdersDbContext))]
-    partial class WorkOrdersDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261005121214_AddWorkOrdersOrganizationIdStatusIndex")]
+    partial class AddWorkOrdersOrganizationIdStatusIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -23,25 +23,33 @@ describe('WorkOrderService', () => {
     expect(service).toBeTruthy();
   });
 
-  it('getById finds the matching work order from the list endpoint', () => {
+  it('getById requests the single-work-order endpoint', () => {
     let result: unknown;
     service.getById(2).subscribe(workOrder => (result = workOrder));
 
-    httpMock.expectOne('/api/workorders').flush([
-      { id: 1, title: 'First', status: 0 },
-      { id: 2, title: 'Second', status: 1 },
-    ]);
+    const request = httpMock.expectOne('/api/workorders/2');
+    expect(request.request.method).toBe('GET');
+    request.flush({ id: 2, title: 'Second', status: 1 });
 
     expect(result).toEqual({ id: 2, title: 'Second', status: 1 });
   });
 
-  it('getById returns undefined when no work order matches', () => {
+  it('getById returns undefined when the API answers 404', () => {
     let result: unknown = 'not-set';
     service.getById(999).subscribe(workOrder => (result = workOrder));
 
-    httpMock.expectOne('/api/workorders').flush([{ id: 1, title: 'First', status: 0 }]);
+    httpMock.expectOne('/api/workorders/999').flush(null, { status: 404, statusText: 'Not Found' });
 
     expect(result).toBeUndefined();
+  });
+
+  it('getById passes other errors through instead of hiding them', () => {
+    let errorStatus: number | undefined;
+    service.getById(2).subscribe({ error: (error: { status: number }) => (errorStatus = error.status) });
+
+    httpMock.expectOne('/api/workorders/2').flush(null, { status: 500, statusText: 'Server Error' });
+
+    expect(errorStatus).toBe(500);
   });
 
   it('getReport requests the real report endpoint and returns the counts', () => {

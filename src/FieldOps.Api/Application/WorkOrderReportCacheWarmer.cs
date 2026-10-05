@@ -1,4 +1,5 @@
 using FieldOps.Modules.Organizations;
+using StackExchange.Redis;
 
 namespace FieldOps.Api.Application;
 
@@ -23,6 +24,7 @@ public class WorkOrderReportCacheWarmer : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WorkOrderReportCacheWarmer> _logger;
+    private bool _warmingPaused;
 
     public WorkOrderReportCacheWarmer(IServiceScopeFactory scopeFactory, ILogger<WorkOrderReportCacheWarmer> logger)
     {
@@ -51,7 +53,12 @@ public class WorkOrderReportCacheWarmer : BackgroundService
             // ExecuteAsync at all, for any reason.
             try
             {
-                WarmAllOrganizations();
+                await WarmAllOrganizationsAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Day 118: the host is shutting down mid-tick — not a failure.
+                break;
             }
             catch (Exception ex)
             {
@@ -60,9 +67,36 @@ public class WorkOrderReportCacheWarmer : BackgroundService
         }
     }
 
-    private void WarmAllOrganizations()
+    // Day 118: async, using GetStatusReportAsync — the synchronous version no
+    // longer exists (Day 117's thread-pool starvation finding).
+    private async Task WarmAllOrganizationsAsync(CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
+
+        // Day 112 (found in Azure logs, Day 109): warming exists only to fill
+        // Redis. Since Day 108 the report falls back to the database when
+        // Redis is down, so without this guard every tick computed every
+        // organization's report and then failed to cache it — wasted database
+        // work. IsConnected reads in-memory state (no network call), and the
+        // multiplexer keeps reconnecting in the background, so warming resumes
+        // on its own. Logged only on a transition, not on every 10s tick.
+        var redis = scope.ServiceProvider.GetRequiredService<IConnectionMultiplexer>();
+        if (!redis.IsConnected)
+        {
+            if (!_warmingPaused)
+            {
+                _warmingPaused = true;
+                _logger.LogWarning("Redis is unavailable; pausing work order report cache warming until it reconnects");
+            }
+            return;
+        }
+
+        if (_warmingPaused)
+        {
+            _warmingPaused = false;
+            _logger.LogInformation("Redis is reachable again; resuming work order report cache warming");
+        }
+
         var organizationDirectory = scope.ServiceProvider.GetRequiredService<IOrganizationDirectory>();
         var workOrderReportService = scope.ServiceProvider.GetRequiredService<WorkOrderReportService>();
 
@@ -70,9 +104,9 @@ public class WorkOrderReportCacheWarmer : BackgroundService
         {
             try
             {
-                workOrderReportService.GetStatusReport(organization.Id);
+                await workOrderReportService.GetStatusReportAsync(organization.Id, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // One organization's failure (e.g. a transient DB blip)
                 // must not stop the rest of this same tick's organizations

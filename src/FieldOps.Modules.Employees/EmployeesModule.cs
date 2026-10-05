@@ -10,7 +10,8 @@ public static class EmployeesModule
 {
     public static IServiceCollection AddEmployeesModule(this IServiceCollection services, string connectionString)
     {
-        services.AddDbContext<EmployeesDbContext>(options => options.UseSqlServer(connectionString));
+        // Day 111: transient-fault retries — see OrganizationsModule.
+        services.AddDbContext<EmployeesDbContext>(options => options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure()));
         return services.AddScoped<IEmployeeDirectory, EfEmployeeDirectory>();
     }
 }

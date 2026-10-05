@@ -36,4 +36,18 @@ internal class EfAuditLogWriter : IAuditLogWriter
             _logger.LogWarning(ex, "Failed to record audit log entry for work order {WorkOrderId} ({Action})", workOrderId, action);
         }
     }
+
+    // Day 119: same failure isolation, awaited instead of blocking.
+    public async Task RecordAsync(int organizationId, int workOrderId, string action, string actorType, int actorId)
+    {
+        try
+        {
+            _dbContext.AuditLogEntries.Add(new AuditLogEntry(organizationId, workOrderId, action, actorType, actorId, DateTime.UtcNow));
+            await _dbContext.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record audit log entry for work order {WorkOrderId} ({Action})", workOrderId, action);
+        }
+    }
 }

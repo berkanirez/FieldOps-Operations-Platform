@@ -138,6 +138,16 @@ var redisConnectionString = builder.Configuration["Redis:ConnectionString"]
     ?? throw new InvalidOperationException("Missing configuration: Redis:ConnectionString");
 var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
 redisOptions.AbortOnConnectFail = false;
+
+// Day 116 (found by profiling an 8.5 -> 37 minute test-suite slowdown): by
+// default, while disconnected, StackExchange.Redis does not fail commands —
+// it queues them in a backlog until the connection returns. A synchronous
+// KeyDelete in WorkOrderReportService.InvalidateCache (called by Assign,
+// Start, Complete, ...) was captured with dotnet-stack waiting there for
+// over 11 minutes, so a Redis outage would hang those requests rather than
+// let the existing catch blocks (Day 51/108/112) degrade gracefully. The
+// cache is optional: fail fast and let the callers fall back.
+redisOptions.BacklogPolicy = BacklogPolicy.FailFast;
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
 builder.Services.AddScoped<WorkOrderReportService>();
 builder.Services.AddHostedService<WorkOrderReportCacheWarmer>();

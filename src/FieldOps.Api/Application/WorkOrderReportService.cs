@@ -29,39 +29,50 @@ public class WorkOrderReportService
     // Redis calls are guarded so an unreachable Redis (found live on Azure,
     // Day 107, where no Redis is deployed) degrades to "always compute from
     // the database" instead of a 500. Same principle as InvalidateCache below.
-    public WorkOrderStatusReport GetStatusReport(int organizationId)
+    //
+    // Day 117 correction (found by the first load test: 11% of requests at 50
+    // virtual users failed with an unhandled RedisTimeoutException): Day 108
+    // caught only RedisException, assuming timeouts derive from it. They
+    // don't — RedisTimeoutException derives from System.TimeoutException
+    // (verified by reflection) — so both kinds are caught explicitly. Still
+    // not a bare catch (Exception): a JSON or programming error must surface.
+    //
+    // Day 118: async end-to-end (Redis StringGetAsync/StringSetAsync, EF
+    // ToDictionaryAsync) — Day 117's load test showed synchronous I/O here
+    // starving the thread pool (WORKER Busy=42, Min=12).
+    public async Task<WorkOrderStatusReport> GetStatusReportAsync(int organizationId, CancellationToken cancellationToken)
     {
         var cacheKey = $"workorders:report:{organizationId}";
 
         try
         {
-            var cached = _redis.GetDatabase().StringGet(cacheKey);
+            var cached = await _redis.GetDatabase().StringGetAsync(cacheKey);
             if (cached.HasValue)
             {
                 return JsonSerializer.Deserialize<WorkOrderStatusReport>((string)cached!)!;
             }
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
         {
             _logger.LogWarning(ex, "Redis read failed for work order report of organization {OrganizationId}; computing from database", organizationId);
         }
 
-        var workOrders = _workOrderDirectory.GetAll()
-            .Where(w => w.OrganizationId == organizationId)
-            .ToList();
+        // Day 113: counted by the database (GROUP BY) instead of loading every
+        // work order and counting in memory.
+        var counts = await _workOrderDirectory.GetStatusCountsAsync(organizationId, cancellationToken);
 
         var report = new WorkOrderStatusReport(
             organizationId,
-            Open: workOrders.Count(w => w.Status == WorkOrderStatus.Open),
-            Assigned: workOrders.Count(w => w.Status == WorkOrderStatus.Assigned),
-            InProgress: workOrders.Count(w => w.Status == WorkOrderStatus.InProgress),
-            Completed: workOrders.Count(w => w.Status == WorkOrderStatus.Completed));
+            Open: counts.GetValueOrDefault(WorkOrderStatus.Open),
+            Assigned: counts.GetValueOrDefault(WorkOrderStatus.Assigned),
+            InProgress: counts.GetValueOrDefault(WorkOrderStatus.InProgress),
+            Completed: counts.GetValueOrDefault(WorkOrderStatus.Completed));
 
         try
         {
-            _redis.GetDatabase().StringSet(cacheKey, JsonSerializer.Serialize(report), CacheDuration);
+            await _redis.GetDatabase().StringSetAsync(cacheKey, JsonSerializer.Serialize(report), CacheDuration);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
         {
             _logger.LogWarning(ex, "Redis write failed for work order report of organization {OrganizationId}; returning uncached result", organizationId);
         }
@@ -80,6 +91,24 @@ public class WorkOrderReportService
     // response for the caller, the exact same principle Day 51 applied to
     // INotificationSender. Worst case: a stale cached report for up to the
     // remaining TTL, not a failed request.
+    //
+    // Day 119: async version for Create/Assign/Start/Complete — the mixed
+    // load test showed the synchronous KeyDelete (UNLINK) timing out 350
+    // times while blocking threads. Unassign/Reopen still use the sync one
+    // until their conversion. No CancellationToken on purpose: the change it
+    // invalidates for is already saved.
+    public async Task InvalidateCacheAsync(int organizationId)
+    {
+        try
+        {
+            await _redis.GetDatabase().KeyDeleteAsync($"workorders:report:{organizationId}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to invalidate work order report cache for organization {OrganizationId}", organizationId);
+        }
+    }
+
     public void InvalidateCache(int organizationId)
     {
         try

@@ -30,6 +30,14 @@ internal class EfEmployeeDirectory : IEmployeeDirectory
         return employee is null ? null : new EmployeeSummary(employee.Id, employee.Name, employee.OrganizationId, employee.Role);
     }
 
+    // Day 118: same query as GetById, awaited — the thread returns to the pool
+    // while SQL Server answers.
+    public async Task<EmployeeSummary?> GetByIdAsync(int id, CancellationToken cancellationToken)
+    {
+        var employee = await _dbContext.Employees.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+        return employee is null ? null : new EmployeeSummary(employee.Id, employee.Name, employee.OrganizationId, employee.Role);
+    }
+
     public EmployeeSummary Create(string name, int organizationId, EmployeeRole role)
     {
         var employee = new Employee(name, organizationId, role);

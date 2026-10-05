@@ -7,4 +7,9 @@ namespace FieldOps.Modules.AuditLogs;
 public interface IAuditLogWriter
 {
     void Record(int organizationId, int workOrderId, string action, string actorType, int actorId);
+
+    // Day 119: async for Assign/Complete. Deliberately no CancellationToken:
+    // the audit entry describes a change that has already been saved, so a
+    // client disconnecting at that moment must not cancel its audit record.
+    Task RecordAsync(int organizationId, int workOrderId, string action, string actorType, int actorId);
 }

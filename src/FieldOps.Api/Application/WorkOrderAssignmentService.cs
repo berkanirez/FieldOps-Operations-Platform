@@ -19,9 +19,15 @@ public class WorkOrderAssignmentService
         _employeeDirectory = employeeDirectory;
     }
 
-    public WorkOrderAssignmentResult AssignWorkOrder(int workOrderId, int employeeId, int callerOrganizationId)
+    // Day 119: async — Assign is part of the write flow the mixed load test
+    // exercises. An async method can't have an out parameter, so the lookups
+    // happen here and the shared checks live in ValidateWorkOrderAndEmployee's
+    // pure decision part (CheckWorkOrderAndEmployee), used by both paths.
+    public async Task<WorkOrderAssignmentResult> AssignWorkOrderAsync(int workOrderId, int employeeId, int callerOrganizationId, CancellationToken cancellationToken)
     {
-        var validationError = ValidateWorkOrderAndEmployee(workOrderId, employeeId, callerOrganizationId, out var workOrder);
+        var workOrder = await _workOrderDirectory.GetByIdAsync(workOrderId, cancellationToken);
+        var employee = workOrder is null ? null : await _employeeDirectory.GetByIdAsync(employeeId, cancellationToken);
+        var validationError = CheckWorkOrderAndEmployee(workOrderId, employeeId, callerOrganizationId, workOrder, employee);
         if (validationError is not null)
         {
             return validationError;
@@ -32,7 +38,7 @@ public class WorkOrderAssignmentService
             return WorkOrderAssignmentResult.Failure($"Work order {workOrderId} is not open for assignment.");
         }
 
-        var assigned = _workOrderDirectory.Assign(workOrderId, employeeId);
+        var assigned = await _workOrderDirectory.AssignAsync(workOrderId, employeeId, cancellationToken);
         return WorkOrderAssignmentResult.Success(assigned!);
     }
 
@@ -77,14 +83,21 @@ public class WorkOrderAssignmentService
     // lookup, applied consistently since Day 41's independent-task fix.
     private WorkOrderAssignmentResult? ValidateWorkOrderAndEmployee(int workOrderId, int employeeId, int callerOrganizationId, out WorkOrderSummary? workOrder)
     {
+        // The caller only uses workOrder when no error is returned.
         workOrder = _workOrderDirectory.GetById(workOrderId);
+        var employee = workOrder is null ? null : _employeeDirectory.GetById(employeeId);
+        return CheckWorkOrderAndEmployee(workOrderId, employeeId, callerOrganizationId, workOrder, employee);
+    }
+
+    // Day 119: the rules themselves, shared by the sync (Reassign) and async
+    // (Assign) paths so they can never drift apart.
+    private static WorkOrderAssignmentResult? CheckWorkOrderAndEmployee(int workOrderId, int employeeId, int callerOrganizationId, WorkOrderSummary? workOrder, EmployeeSummary? employee)
+    {
         if (workOrder is null || workOrder.OrganizationId != callerOrganizationId)
         {
-            workOrder = null;
             return WorkOrderAssignmentResult.Failure($"Work order {workOrderId} does not exist.");
         }
 
-        var employee = _employeeDirectory.GetById(employeeId);
         if (employee is null || employee.OrganizationId != workOrder.OrganizationId)
         {
             return WorkOrderAssignmentResult.Failure($"Employee {employeeId} does not exist.");

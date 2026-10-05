@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { Observable, of, throwError } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { WorkOrder } from './work-order';
 import { WorkOrderStatusReport } from './work-order-status-report';
 
@@ -27,13 +27,15 @@ export class WorkOrderService {
     return this.http.get<WorkOrder[]>(this.apiBaseUrl, { headers: this.demoHeaders });
   }
 
-  // Day 91: FieldOps.Api has no single-work-order endpoint today — adding
-  // one is a backend change outside today's scope (Angular routing). Reusing
-  // the existing list endpoint and filtering client-side is a deliberate,
-  // temporary simplification: it works, but refetches every work order just
-  // to show one. A dedicated GET /api/workorders/{id} would be the real fix.
+  // Day 115: the Day 91 stand-in (load the whole list, search it here) is
+  // gone — the list is now paged on the server, so a work order beyond the
+  // first page would never be found. GET /api/workorders/{id} returns 404 for
+  // a missing work order or another organization's; that maps to undefined
+  // (the detail page's "not found"), while any other error still surfaces.
   getById(id: number): Observable<WorkOrder | undefined> {
-    return this.getAll().pipe(map(workOrders => workOrders.find(w => w.id === id)));
+    return this.http.get<WorkOrder>(`${this.apiBaseUrl}/${id}`, { headers: this.demoHeaders }).pipe(
+      catchError((error: HttpErrorResponse) => (error.status === 404 ? of(undefined) : throwError(() => error))),
+    );
   }
 
   // Day 92: mirrors FieldOps.Api's real CreateWorkOrderRequest(Title, CustomerId?)
