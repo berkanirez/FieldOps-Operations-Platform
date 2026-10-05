@@ -19,22 +19,31 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-10}"
 
 failures=0
+LAST_BODY=""
+# Day 121: the API requires a bearer token; set by the "login" step below.
+TOKEN=""
 
-# check <name> <path> <expected-status> <expected-body-substring>
+# check <name> <path> <expected-status> <expected-body-substring> [method] [json-body]
 check() {
     local name="$1" path="$2" expected_status="$3" expected_body="$4"
+    local method="${5:-GET}" data="${6:-}"
     local attempt status body
+    local args=(-s --max-time 30 -w '\n%{http_code}' -X "$method")
+    if [[ -n "$TOKEN" ]]; then
+        args+=(-H "Authorization: Bearer $TOKEN")
+    fi
+    if [[ -n "$data" ]]; then
+        args+=(-H "Content-Type: application/json" -d "$data")
+    fi
 
     for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
-        # Demo tenant headers: organization 1's Admin (employee 1).
-        body=$(curl -s --max-time 30 -w '\n%{http_code}' \
-            -H "X-Organization-Id: 1" -H "X-Employee-Id: 1" \
-            "$BASE_URL$path")
+        body=$(curl "${args[@]}" "$BASE_URL$path")
         status="${body##*$'\n'}"
         body="${body%$'\n'*}"
 
         if [[ "$status" == "$expected_status" && "$body" == *"$expected_body"* ]]; then
             echo "PASS  $name  $path -> $status"
+            LAST_BODY="$body"
             return 0
         fi
 
@@ -54,6 +63,12 @@ echo "Smoke testing $BASE_URL"
 # (Day 98), since that path only exists inside the Angular router.
 check "frontend"      "/"                       200 "<app-root"
 check "deep-link"     "/work-orders/1"          200 "<app-root"
+# Day 121: a deployment must reject anonymous API calls (SECURITY_REVIEW.md
+# F1/F3) — checked before logging in, while no token is set.
+check "auth-required" "/api/workorders/report"  401 ""
+# Log in as the demo organization 1 Admin (employee 1) and keep the token.
+check "login"         "/api/auth/login"         200 '"token"' POST '{"employeeId":1}'
+TOKEN=$(sed -E 's/.*"token":"([^"]+)".*/\1/' <<<"$LAST_BODY")
 # Through nginx's /api proxy to the API and its database (Days 105-107).
 check "api+database"  "/api/organizations"      200 '"name"'
 # The report endpoint — returned 500 without Redis until Day 108's fix.

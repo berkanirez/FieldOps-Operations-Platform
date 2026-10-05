@@ -6,6 +6,16 @@
 
 This is a self-review written as part of a learning project. It is not a professional penetration test. Every "open" finding below has a reproducible request and its real result; every "protected" finding has evidence too.
 
+## Remediation status
+
+| Finding | Status | Change |
+|---|---|---|
+| F1 Client-asserted identity | **Fixed for work orders** | Every endpoint requires a valid bearer token (fallback authorization policy). Work-order endpoints read the employee and organization from validated token claims; the identity headers are ignored. Re-running the original probes: headers-only requests → 401; a valid organization 1 token with a forged `X-Organization-Id: 2` creates the work order in organization 1. The Employees, Organizations and Billing controllers now require a token but still read identity headers — converting them is the next step. |
+| F3 JWT never required | **Fixed** | Fallback policy `RequireAuthenticatedUser`. Anonymous only for login, health checks, OpenAPI and — deliberately — customer approval (see below). Tampered tokens and tokens signed with another key → 401 (covered by integration tests). |
+| F4 Public fallback signing key | **Fixed** | The hard-coded key is removed. The app refuses to start when `Jwt:SigningKey` is missing (verified in Production mode). Docker Compose and Kubernetes run the demo in Development, which uses the demo key from `appsettings.Development.json`; a real deployment must supply `Jwt__SigningKey` from a secret store. |
+| Customer approval | **Open** | `POST /api/workorders/{id}/approve` stays `[AllowAnonymous]` and still trusts `X-Customer-Id`, because customers cannot log in yet. |
+| F2, F5–F12 | Open | Next steps per the remediation plan. |
+
 ## Summary
 
 The application is robust and well tested in its business behaviour. **Its main weakness is identity:** every request states who it is in plain headers, and nothing verifies that claim. Tenant isolation, input validation and SQL safety work as designed, but all of them assume an honest caller.

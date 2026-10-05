@@ -34,8 +34,7 @@ public class WorkOrderReportCacheResilienceTests : IClassFixture<FieldOpsApiFact
 
         // Organization 2's seeded Admin (employee 3). This test class gets its
         // own factory — and so its own fresh database — so the count is exact.
-        client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        client.DefaultRequestHeaders.Add("X-Employee-Id", "3");
+        await client.AuthenticateAsAsync(3);
 
         var create = await client.PostAsJsonAsync("/api/workorders", new { Title = "Report resilience check" });
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);

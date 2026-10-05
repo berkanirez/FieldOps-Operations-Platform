@@ -21,7 +21,7 @@ public class WorkOrdersPaginationIntegrationTests : IClassFixture<FieldOpsApiFac
     public async Task GetAll_WithPageSize_ReturnsThatPageInIdOrder()
     {
         // Organization 1's seeded Admin (employee 1).
-        var client = CreateClient(organizationId: 1, employeeId: 1);
+        var client = await CreateClientAsync(1);
         for (var i = 1; i <= 3; i++)
         {
             var created = await client.PostAsJsonAsync("/api/workorders", new { Title = $"Pagination check {i}" });
@@ -48,7 +48,7 @@ public class WorkOrdersPaginationIntegrationTests : IClassFixture<FieldOpsApiFac
     [InlineData("page=1&pageSize=101")]
     public async Task GetAll_WithOutOfRangePaging_Returns400ProblemDetails(string query)
     {
-        var client = CreateClient(organizationId: 1, employeeId: 1);
+        var client = await CreateClientAsync(1);
 
         var response = await client.GetAsync($"/api/workorders?{query}");
 
@@ -59,7 +59,7 @@ public class WorkOrdersPaginationIntegrationTests : IClassFixture<FieldOpsApiFac
     [Fact]
     public async Task GetById_OwnOrganization_Returns200()
     {
-        var client = CreateClient(organizationId: 1, employeeId: 1);
+        var client = await CreateClientAsync(1);
         var created = await client.PostAsJsonAsync("/api/workorders", new { Title = "Get by id check" });
         var id = (await created.Content.ReadFromJsonAsync<WorkOrderResponse>())!.Id;
 
@@ -74,13 +74,13 @@ public class WorkOrdersPaginationIntegrationTests : IClassFixture<FieldOpsApiFac
     [Fact]
     public async Task GetById_OtherOrganizationsWorkOrder_Returns404()
     {
-        var organizationOne = CreateClient(organizationId: 1, employeeId: 1);
+        var organizationOne = await CreateClientAsync(1);
         var created = await organizationOne.PostAsJsonAsync("/api/workorders", new { Title = "Belongs to organization 1" });
         var id = (await created.Content.ReadFromJsonAsync<WorkOrderResponse>())!.Id;
 
         // Organization 2's seeded Admin (employee 3) asks for organization 1's
         // work order by id: 404, not 403 — a 403 would confirm it exists.
-        var organizationTwo = CreateClient(organizationId: 2, employeeId: 3);
+        var organizationTwo = await CreateClientAsync(3);
         var response = await organizationTwo.GetAsync($"/api/workorders/{id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -91,11 +91,11 @@ public class WorkOrdersPaginationIntegrationTests : IClassFixture<FieldOpsApiFac
         Assert.Equal(HttpStatusCode.OK, ownResponse.StatusCode);
     }
 
-    private HttpClient CreateClient(int organizationId, int employeeId)
+    // Day 121: identity comes from a real login token, not headers.
+    private async Task<HttpClient> CreateClientAsync(int employeeId)
     {
         var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Organization-Id", organizationId.ToString());
-        client.DefaultRequestHeaders.Add("X-Employee-Id", employeeId.ToString());
+        await client.AuthenticateAsAsync(employeeId);
         return client;
     }
 

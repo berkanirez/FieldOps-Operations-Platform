@@ -26,36 +26,88 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     }
 
     [Fact]
-    public async Task GetAll_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task GetAll_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.GetAsync("/api/workorders");
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // Day 121 (SECURITY_REVIEW.md F1, probe P1): identity headers alone are no
+    // longer an identity. Before today this exact request — organization 1's
+    // Admin claimed purely in headers — returned 200.
     [Fact]
-    public async Task GetAll_NoEmployeeHeader_ReturnsBadRequest()
+    public async Task GetAll_IdentityHeadersWithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
+        client.DefaultRequestHeaders.Add("X-Employee-Id", "1");
 
         var response = await client.GetAsync("/api/workorders");
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // Day 121 (probe P3): a forged organization header is ignored — the
+    // tenant comes from the token. Previously the same header switched the
+    // request to organization 2 (and was then refused with 403).
+    [Fact]
+    public async Task GetAll_ForgedOrganizationHeader_IsIgnored()
+    {
+        var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1); // seeded Org1 Admin
+        client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
+
+        var response = await client.GetAsync("/api/workorders");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var workOrders = await response.Content.ReadFromJsonAsync<List<WorkOrderDto>>();
+        Assert.All(workOrders!, w => Assert.Equal(1, w.OrganizationId));
     }
 
     [Fact]
-    public async Task GetAll_ByEmployeeFromAnotherOrganization_ReturnsForbidden()
+    public async Task GetAll_TokenSignedWithAnotherKey_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin, targeting Org 2
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", ForgeToken(signingKey: "an-attackers-own-key-that-is-at-least-32-bytes-long"));
 
         var response = await client.GetAsync("/api/workorders");
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetAll_MalformedToken_ReturnsUnauthorized()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "not-a-jwt");
+
+        var response = await client.GetAsync("/api/workorders");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // A structurally valid token claiming organization 1's Admin, signed with
+    // a key the API doesn't trust — what an attacker without the real key
+    // could produce.
+    private static string ForgeToken(string signingKey)
+    {
+        var credentials = new Microsoft.IdentityModel.Tokens.SigningCredentials(
+            new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(signingKey)),
+            Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            issuer: "FieldOps.Api",
+            audience: "FieldOps.Api",
+            claims: [
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, "1"),
+                new System.Security.Claims.Claim("organizationId", "1"),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, "Admin")],
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials);
+        return new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token);
     }
 
     // Day 61: a coverage audit found that Create shares ValidateMembership
@@ -64,25 +116,29 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // proven directly against Create this time, not inferred from GetAll's
     // coverage of a shared helper.
     [Fact]
-    public async Task Create_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Create_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/workorders", new { Title = "Should-Never-Be-Created" });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // Day 121 (probe P1/P3): organization 1's Admin sending organization 2's
+    // header creates the work order in organization 1 — the token decides.
     [Fact]
-    public async Task Create_ByEmployeeFromAnotherOrganization_ReturnsForbidden()
+    public async Task Create_ForgedOrganizationHeader_CreatesInTokensOrganization()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1); // seeded Org1 Admin
         client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin, claiming Org 2's header
 
-        var response = await client.PostAsJsonAsync("/api/workorders", new { Title = "Should-Never-Be-Created" });
+        var response = await client.PostAsJsonAsync("/api/workorders", new { Title = "Forged-Header-Check" });
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var dto = await response.Content.ReadFromJsonAsync<WorkOrderDto>();
+        Assert.Equal(1, dto!.OrganizationId);
     }
 
     [Fact]
@@ -90,11 +146,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
-        org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin
+        await org1Client.AuthenticateAsAsync(1); // seeded Org1 Admin
         var org2Client = _factory.CreateClient();
-        org2Client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        org2Client.DefaultRequestHeaders.Add("X-Employee-Id", "3"); // seeded Org2 Admin
+        await org2Client.AuthenticateAsAsync(3); // seeded Org2 Admin
 
         var createResponse = await org1Client.PostAsJsonAsync("/api/workorders", new { Title = $"Org1-Only-{uniqueSuffix}" });
         var dto = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -115,13 +169,13 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // headers are omitted) so a 400 can only mean ValidateMembership fired,
     // never [ApiController]'s own unrelated model-validation.
     [Fact]
-    public async Task Assign_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Assign_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/workorders/999999/assign", new { EmployeeId = 1 });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -129,8 +183,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
-        org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin
+        await org1Client.AuthenticateAsAsync(1); // seeded Org1 Admin
 
         var createResponse = await org1Client.PostAsJsonAsync("/api/workorders", new { Title = $"Assign-Me-{uniqueSuffix}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -148,15 +201,13 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Member-Cannot-Assign-{uniqueSuffix}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // seeded Org1 Member
+        await org1MemberClient.AuthenticateAsAsync(2); // seeded Org1 Member
 
         var assignResponse = await org1MemberClient.PostAsJsonAsync($"/api/workorders/{created!.Id}/assign", new { EmployeeId = 2 });
 
@@ -168,8 +219,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
-        org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1Client.AuthenticateAsAsync(1);
 
         var createResponse = await org1Client.PostAsJsonAsync("/api/workorders", new { Title = $"Only-Once-{uniqueSuffix}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -187,8 +237,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
-        org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1Client.AuthenticateAsAsync(1);
 
         var createResponse = await org1Client.PostAsJsonAsync("/api/workorders", new { Title = $"Cross-Org-Assignee-{uniqueSuffix}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -208,15 +257,13 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
-        org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1Client.AuthenticateAsAsync(1);
 
         var createResponse = await org1Client.PostAsJsonAsync("/api/workorders", new { Title = $"Org1-Private-{uniqueSuffix}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
 
         var org2Client = _factory.CreateClient();
-        org2Client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        org2Client.DefaultRequestHeaders.Add("X-Employee-Id", "3"); // seeded Org2 Admin
+        await org2Client.AuthenticateAsAsync(3); // seeded Org2 Admin
 
         // Deliberately targets employee id 2 — Org 1's OWN Member. If the
         // work-order-organization check were missing, this would otherwise
@@ -245,26 +292,24 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // above. Start takes no body, so nothing else could produce a 400 here
     // besides ValidateMembership.
     [Fact]
-    public async Task Start_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Start_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsync("/api/workorders/999999/start", null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Start_ByAssignedEmployee_TransitionsToInProgress()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Start-Me-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // the assignee
+        await org1MemberClient.AuthenticateAsAsync(2); // the assignee
 
         var startResponse = await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/start", null);
         var started = await startResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -277,8 +322,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Start_ByAdminWhoIsNotTheAssignee_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Admin-Cannot-Start-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         // The Admin assigned this work order but wasn't assigned it
@@ -300,8 +344,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Start_OnUnassignedWorkOrder_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Still-Open-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -315,26 +358,24 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
 
     // Day 62: audit continuation — same reasoning as Assign/Start above.
     [Fact]
-    public async Task Complete_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Complete_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsync("/api/workorders/999999/complete", null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Complete_ByAssignedEmployee_TransitionsToCompleted()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Complete-Me-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
 
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/start", null);
         var completeResponse = await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/complete", null);
@@ -348,13 +389,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Complete_BeforeStart_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Skip-Start-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
 
         // Still Assigned, never started — completing straight from Assigned
         // skips a lifecycle step and must be rejected.
@@ -366,30 +405,40 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // Day 43: creates a genuinely new Org1 employee via the Employees API,
     // so reassignment tests have a second real, valid target within Org1
     // without depending on more seed data than already exists.
+    //
+    // Day 121: EmployeesController still reads identity from headers until
+    // its own conversion, so this one request carries them alongside the
+    // client's bearer token (the work-order endpoints ignore headers now).
     private static async Task<int> CreateOrg1EmployeeAsync(HttpClient org1AdminClient, string name)
     {
-        var response = await org1AdminClient.PostAsJsonAsync("/api/employees", new { Name = name });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/employees")
+        {
+            Content = JsonContent.Create(new { Name = name })
+        };
+        request.Headers.Add("X-Organization-Id", "1");
+        request.Headers.Add("X-Employee-Id", "1");
+        var response = await org1AdminClient.SendAsync(request);
+        response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<EmployeeDto>();
         return body!.Id;
     }
 
     // Day 62: audit continuation — same reasoning as Assign's new test.
     [Fact]
-    public async Task Reassign_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Reassign_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/workorders/999999/reassign", new { EmployeeId = 1 });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Reassign_WhileAssigned_ChangesAssigneeWithoutChangingStatus()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Reassign-Me-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
         var newEmployeeId = await CreateOrg1EmployeeAsync(org1AdminClient, $"Cover-{Guid.NewGuid():N}");
 
@@ -405,13 +454,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_WhileInProgress_Succeeds()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Reassign-InProgress-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/start", null);
 
         var newEmployeeId = await CreateOrg1EmployeeAsync(org1AdminClient, $"Takeover-{Guid.NewGuid():N}");
@@ -426,8 +473,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_OnOpenWorkOrder_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Never-Assigned-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -443,13 +489,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_OnCompletedWorkOrder_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Finished-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/start", null);
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/complete", null);
 
@@ -467,14 +511,12 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_ByUnrelatedMember_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Unrelated-Cannot-Reassign-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var unrelatedEmployeeId = await CreateOrg1EmployeeAsync(org1AdminClient, $"Bystander-{Guid.NewGuid():N}");
         var unrelatedClient = _factory.CreateClient();
-        unrelatedClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        unrelatedClient.DefaultRequestHeaders.Add("X-Employee-Id", unrelatedEmployeeId.ToString());
+        await unrelatedClient.AuthenticateAsAsync(unrelatedEmployeeId);
 
         var reassignResponse = await unrelatedClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/reassign", new { EmployeeId = 2 });
 
@@ -487,14 +529,12 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_ByCurrentAssignee_Succeeds()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Self-Handoff-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
         var newEmployeeId = await CreateOrg1EmployeeAsync(org1AdminClient, $"Covering-{Guid.NewGuid():N}");
 
         var assigneeClient = _factory.CreateClient();
-        assigneeClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        assigneeClient.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // the assignee itself, not an Admin
+        await assigneeClient.AuthenticateAsAsync(2); // the assignee itself, not an Admin
 
         var reassignResponse = await assigneeClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/reassign", new { EmployeeId = newEmployeeId });
         var reassigned = await reassignResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -507,8 +547,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_ToEmployeeFromAnotherOrganization_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Cross-Org-Reassign-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var reassignResponse = await org1AdminClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/reassign", new { EmployeeId = 4 }); // seeded Org2 Member
@@ -523,8 +562,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reassign_ToSameEmployeeAlreadyAssigned_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"No-Op-Reassign-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var reassignResponse = await org1AdminClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/reassign", new { EmployeeId = 2 });
@@ -535,21 +573,20 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // Day 62: audit continuation — Unassign takes no body, so nothing else
     // could produce a 400 here besides ValidateMembership.
     [Fact]
-    public async Task Unassign_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Unassign_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsync("/api/workorders/999999/unassign", null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Unassign_ByAdmin_ReturnsToOpenWithNoAssignee()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Unassign-By-Admin-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var unassignResponse = await org1AdminClient.PostAsync($"/api/workorders/{assigned.Id}/unassign", null);
@@ -564,13 +601,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Unassign_ByCurrentAssignee_Succeeds()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Unassign-By-Self-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var assigneeClient = _factory.CreateClient();
-        assigneeClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        assigneeClient.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // the assignee, not an Admin
+        await assigneeClient.AuthenticateAsAsync(2); // the assignee, not an Admin
 
         var unassignResponse = await assigneeClient.PostAsync($"/api/workorders/{assigned.Id}/unassign", null);
 
@@ -581,14 +616,12 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Unassign_ByUnrelatedMember_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Unassign-Unrelated-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var unrelatedEmployeeId = await CreateOrg1EmployeeAsync(org1AdminClient, $"Bystander-{Guid.NewGuid():N}");
         var unrelatedClient = _factory.CreateClient();
-        unrelatedClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        unrelatedClient.DefaultRequestHeaders.Add("X-Employee-Id", unrelatedEmployeeId.ToString());
+        await unrelatedClient.AuthenticateAsAsync(unrelatedEmployeeId);
 
         var unassignResponse = await unrelatedClient.PostAsync($"/api/workorders/{assigned.Id}/unassign", null);
 
@@ -599,8 +632,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Unassign_OnOpenWorkOrder_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Nothing-To-Unassign-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -614,13 +646,11 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Unassign_OnCompletedWorkOrder_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Already-Done-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/start", null);
         await org1MemberClient.PostAsync($"/api/workorders/{assigned.Id}/complete", null);
 
@@ -642,24 +672,22 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // Day 62: audit continuation — Reopen takes no body, so nothing else
     // could produce a 400 here besides ValidateMembership.
     [Fact]
-    public async Task Reopen_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task Reopen_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsync("/api/workorders/999999/reopen", null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Reopen_ByAdmin_ReturnsToInProgress()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleAsync(org1AdminClient, org1MemberClient, $"Reopen-Me-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var reopenResponse = await org1AdminClient.PostAsync($"/api/workorders/{completed.Id}/reopen", null);
@@ -673,11 +701,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reopen_ByMember_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleAsync(org1AdminClient, org1MemberClient, $"Member-Cannot-Reopen-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         // Even the assignee — who completed it themselves — cannot reopen;
@@ -691,8 +717,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reopen_OnNonCompletedWorkOrder_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Not-Done-Yet-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -710,16 +735,13 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Reopen_ByAdminFromAnotherOrganization_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleAsync(org1AdminClient, org1MemberClient, $"Org1-Private-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org2AdminClient = _factory.CreateClient();
-        org2AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "2");
-        org2AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "3");
+        await org2AdminClient.AuthenticateAsAsync(3);
 
         var reopenResponse = await org2AdminClient.PostAsync($"/api/workorders/{completed.Id}/reopen", null);
 
@@ -729,26 +751,24 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // Day 62: audit continuation, closing out the sweep — a valid body is
     // sent so a 400 can only mean ValidateMembership fired.
     [Fact]
-    public async Task AddEvidence_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task AddEvidence_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/workorders/999999/evidence", new { Note = "irrelevant" });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task AddEvidence_ByAssignee_Succeeds()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Needs-Evidence-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
 
         var evidenceResponse = await org1MemberClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/evidence", new { Note = "Replaced the filter, photo attached (simulated)." });
         var updated = await evidenceResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -761,8 +781,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task AddEvidence_ByAdminWhoIsNotTheAssignee_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Admin-Cannot-Evidence-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var evidenceResponse = await org1AdminClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/evidence", new { Note = "Trying to add this as the Admin." });
@@ -774,8 +793,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task AddEvidence_OnUnassignedWorkOrder_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Nothing-Happening-Yet-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -793,26 +811,24 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     // action gets its own ValidateMembership test immediately, not
     // retroactively after an audit finds it missing.
     [Fact]
-    public async Task GetSummary_NoOrganizationHeader_ReturnsBadRequest()
+    public async Task GetSummary_WithoutToken_ReturnsUnauthorized()
     {
         var client = _factory.CreateClient();
 
         var response = await client.GetAsync("/api/workorders/999999/summary");
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task GetSummary_WithEvidenceNotes_ReturnsFakeAiProviderSummary()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var assigned = await CreateAndAssignWorkOrderAsync(org1AdminClient, $"Needs-Summary-{Guid.NewGuid():N}", assigneeEmployeeId: 2);
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var noteText = $"Checked the pump-{Guid.NewGuid():N}";
         await org1MemberClient.PostAsJsonAsync($"/api/workorders/{assigned.Id}/evidence", new { Note = noteText });
 
@@ -828,8 +844,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task GetSummary_WithNoEvidenceNotes_ReturnsPlaceholder()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"No-Notes-Yet-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -866,8 +881,7 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
             .WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
                 services.AddSingleton<IAiProvider, ThrowingAiProvider>()))
             .CreateClient();
-        brokenAiClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        brokenAiClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await brokenAiClient.AuthenticateAsAsync(1);
 
         var createResponse = await brokenAiClient.PostAsJsonAsync("/api/workorders", new { Title = $"AI-Failure-{Guid.NewGuid():N}" });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
@@ -906,11 +920,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Approve_ByLinkedCustomer_Succeeds()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleWithCustomerAsync(org1AdminClient, org1MemberClient, $"For-Customer-{Guid.NewGuid():N}", assigneeEmployeeId: 2, customerId: 1);
 
         var org1CustomerClient = _factory.CreateClient();
@@ -931,11 +943,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Approve_NoCustomerHeader_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleWithCustomerAsync(org1AdminClient, org1MemberClient, $"No-Customer-Header-{Guid.NewGuid():N}", assigneeEmployeeId: 2, customerId: 1);
 
         var noHeaderClient = _factory.CreateClient();
@@ -951,11 +961,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Approve_ByAnotherOrganizationsCustomer_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleWithCustomerAsync(org1AdminClient, org1MemberClient, $"Org1-Customer-Only-{Guid.NewGuid():N}", assigneeEmployeeId: 2, customerId: 1);
 
         // Org 2's own customer (id=2), claiming Org 1 in the header — fails
@@ -974,11 +982,9 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Approve_OnWorkOrderWithNoLinkedCustomer_ReturnsForbidden()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         var completed = await CompleteFullLifecycleWithCustomerAsync(org1AdminClient, org1MemberClient, $"No-Customer-Linked-{Guid.NewGuid():N}", assigneeEmployeeId: 2, customerId: null);
 
         var org1CustomerClient = _factory.CreateClient();
@@ -998,16 +1004,14 @@ public class WorkOrdersAuthorizationIntegrationTests : IClassFixture<FieldOpsApi
     public async Task Approve_BeforeCompleted_ReturnsBadRequest()
     {
         var org1AdminClient = _factory.CreateClient();
-        org1AdminClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1AdminClient.DefaultRequestHeaders.Add("X-Employee-Id", "1");
+        await org1AdminClient.AuthenticateAsAsync(1);
 
         var createResponse = await org1AdminClient.PostAsJsonAsync("/api/workorders", new { Title = $"Not-Completed-Yet-{Guid.NewGuid():N}", CustomerId = 1 });
         var created = await createResponse.Content.ReadFromJsonAsync<WorkOrderDto>();
         await org1AdminClient.PostAsJsonAsync($"/api/workorders/{created!.Id}/assign", new { EmployeeId = 2 });
 
         var org1MemberClient = _factory.CreateClient();
-        org1MemberClient.DefaultRequestHeaders.Add("X-Organization-Id", "1");
-        org1MemberClient.DefaultRequestHeaders.Add("X-Employee-Id", "2");
+        await org1MemberClient.AuthenticateAsAsync(2);
         await org1MemberClient.PostAsync($"/api/workorders/{created.Id}/start", null); // now InProgress, not Completed
 
         var org1CustomerClient = _factory.CreateClient();

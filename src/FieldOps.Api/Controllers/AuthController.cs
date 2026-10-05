@@ -1,7 +1,9 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using FieldOps.Api.Application;
 using FieldOps.Api.Models;
+using Microsoft.AspNetCore.Authorization;
 using FieldOps.Modules.Employees;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -13,17 +15,24 @@ namespace FieldOps.Api.Controllers;
 // X-Employee-Id header mechanism (Day 40) is untouched — this endpoint only
 // ADDS token issuance, it replaces nothing today. Angular's JWT interceptor
 // and the actual [Authorize]-protected endpoints are later days' work.
+//
+// Day 121: the whole API now requires a token (fallback policy in
+// Program.cs), so login itself must be reachable anonymously. The signing
+// key comes from JwtSettings, validated once at startup — the duplicated
+// public fallback key that lived here is gone (SECURITY_REVIEW.md F4).
+// Still no password check: SECURITY_REVIEW.md F2, a later step.
 [ApiController]
 [Route("api/auth")]
+[AllowAnonymous]
 public class AuthController : ControllerBase
 {
     private readonly IEmployeeDirectory _employeeDirectory;
-    private readonly IConfiguration _configuration;
+    private readonly JwtSettings _jwtSettings;
 
-    public AuthController(IEmployeeDirectory employeeDirectory, IConfiguration configuration)
+    public AuthController(IEmployeeDirectory employeeDirectory, JwtSettings jwtSettings)
     {
         _employeeDirectory = employeeDirectory;
-        _configuration = configuration;
+        _jwtSettings = jwtSettings;
     }
 
     [HttpPost("login")]
@@ -40,8 +49,8 @@ public class AuthController : ControllerBase
             return NotFound($"Employee {request.EmployeeId} does not exist.");
         }
 
-        var signingKey = _configuration["Jwt:SigningKey"] ?? "fieldops-dev-only-fallback-signing-key-do-not-use-in-production";
-        var issuer = _configuration["Jwt:Issuer"] ?? "FieldOps.Api";
+        var signingKey = _jwtSettings.SigningKey;
+        var issuer = _jwtSettings.Issuer;
 
         var claims = new[]
         {

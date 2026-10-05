@@ -155,7 +155,7 @@ Redis, RabbitMQ, and Elasticsearch are intentionally not deployed (to stay withi
 az containerapp update --name fieldops-api --resource-group <rg> --image ghcr.io/berkanirez/fieldops-api:<sha>
 ```
 
-**Verifying a deployment.** [`scripts/smoke-test.sh`](scripts/smoke-test.sh) checks the frontend, an Angular deep link, the API with its database, and the report endpoint through the public URL. It retries to ride out scale-to-zero cold starts, checks response bodies as well as status codes, and exits `0` (healthy) or `1` (failed):
+**Verifying a deployment.** [`scripts/smoke-test.sh`](scripts/smoke-test.sh) checks the frontend, an Angular deep link, that the API rejects anonymous calls (401), login, then the API with its database and the report endpoint using the token, all through the public URL. It retries to ride out scale-to-zero cold starts, checks response bodies as well as status codes, and exits `0` (healthy) or `1` (failed):
 
 ```bash
 scripts/smoke-test.sh https://<frontend-app>.<environment>.azurecontainerapps.io
@@ -177,8 +177,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 A security self-review against the OWASP Top 10, with reproducible evidence and a prioritized fix plan, is in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
 
-* JWT issuance exists, but no endpoint enforces it yet — requests are still identified by unverified `X-Organization-Id` / `X-Employee-Id` headers. Login takes only an employee id (no password), and role-based hiding in the frontend is a UI convenience, not authorization.
-* The JWT signing key is in `appsettings.Development.json` (development only).
+* Every API endpoint requires a JWT (except login, health checks and customer approval). Work-order endpoints take the caller's identity from the token; the Employees, Organizations and Billing controllers still read `X-Organization-Id` / `X-Employee-Id` headers (with a token required). Login takes only an employee id (no password), and role-based hiding in the frontend is a UI convenience, not authorization.
+* The demo JWT signing key is in `appsettings.Development.json` (development only); outside Development the API refuses to start unless `Jwt__SigningKey` is supplied.
 * The AI provider is a deterministic fake; evidence "attachments" are plain text notes.
 * In Kubernetes, the API's dependencies (SQL Server, Redis, RabbitMQ, Elasticsearch) still run outside the cluster under Docker Compose, and the notification service is not deployed to the cluster yet.
 * Migrations are applied by hand rather than by a dedicated migration job.

@@ -7,6 +7,7 @@ using FieldOps.Modules.Employees;
 using FieldOps.Modules.Organizations;
 using FieldOps.Modules.WorkOrders;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -79,8 +80,21 @@ builder.Services.AddCors(options =>
 // X-Employee-Id header mechanism (Day 40) stays exactly as it was. This
 // registers the machinery to VALIDATE a bearer token when a later day
 // actually starts requiring one; until then it has nothing to do.
-var jwtSigningKey = builder.Configuration["Jwt:SigningKey"] ?? "fieldops-dev-only-fallback-signing-key-do-not-use-in-production";
+//
+// Day 121 (docs/SECURITY_REVIEW.md F4): the hard-coded fallback signing key
+// is gone — it was published in this public repository, and with no Jwt
+// section in appsettings.json, Production signed tokens with it. Without a
+// configured key the app now refuses to start (fail fast) instead of
+// running with a key anyone can read. Development keeps its demo key in
+// appsettings.Development.json; real environments supply Jwt__SigningKey
+// from a secret store.
+var jwtSigningKey = builder.Configuration["Jwt:SigningKey"];
+if (string.IsNullOrWhiteSpace(jwtSigningKey))
+{
+    throw new InvalidOperationException("Missing configuration: Jwt:SigningKey (supply it from a secret store, e.g. the Jwt__SigningKey environment variable).");
+}
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "FieldOps.Api";
+builder.Services.AddSingleton(new JwtSettings(jwtSigningKey, jwtIssuer));
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -95,6 +109,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey)),
         };
     });
+
+// Day 121 (SECURITY_REVIEW.md F1/F3): secure by default — every endpoint
+// requires an authenticated caller unless it explicitly opts out with
+// [AllowAnonymous] (login, health checks, OpenAPI, and for now the
+// customer-only Approve action). A fallback policy can't be forgotten on a
+// new controller the way a per-controller [Authorize] attribute can.
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 // The host installs each module through its own extension method — it never
 // names any module's internal concrete implementation class (or its
@@ -305,7 +331,7 @@ catch (Exception ex)
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.MapOpenApi().AllowAnonymous();
 }
 
 // Day 55: registered before everything else so the correlation ID scope
@@ -352,16 +378,18 @@ static Task WriteHealthCheckResponse(HttpContext context, Microsoft.Extensions.D
 // Day 56: /health/live never runs any check (Predicate: _ => false) — pure
 // "is the process responding at all." /health/ready runs only the checks
 // tagged "ready" — the real dependency checks.
+// Day 121: health checks stay anonymous — Kubernetes probes and the
+// smoke test call them without a token.
 app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = _ => false,
     ResponseWriter = WriteHealthCheckResponse
-});
+}).AllowAnonymous();
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
     ResponseWriter = WriteHealthCheckResponse
-});
+}).AllowAnonymous();
 
 app.MapControllers();
 

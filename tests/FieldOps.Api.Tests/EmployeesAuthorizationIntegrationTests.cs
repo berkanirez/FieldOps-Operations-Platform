@@ -17,6 +17,11 @@ namespace FieldOps.Api.Tests;
 // shared memory). Each test uses a unique employee name to avoid any test
 // depending on another's leftover data — the same discipline StockPilot's
 // Day 27 unique-SKU convention used.
+// Day 121: the API now requires a bearer token everywhere (fallback policy),
+// but EmployeesController still reads identity from X-Organization-Id /
+// X-Employee-Id until its own conversion. So every client authenticates
+// (as employee 1 — the token isn't consulted by this controller yet) and the
+// header-based scenarios below keep testing exactly what they did before.
 public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiFactory>
 {
     private readonly FieldOpsApiFactory _factory;
@@ -30,6 +35,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task GetAll_NoOrganizationHeader_ReturnsBadRequest()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
 
         var response = await client.GetAsync("/api/employees");
 
@@ -45,6 +51,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task GetAll_NoEmployeeHeader_ReturnsBadRequest()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
 
         var response = await client.GetAsync("/api/employees");
@@ -56,6 +63,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task GetAll_ByEmployeeFromAnotherOrganization_ReturnsForbidden()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin, targeting Org 2's list
 
@@ -68,6 +76,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task Create_NoOrganizationHeader_ReturnsBadRequest()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
 
         var response = await client.PostAsJsonAsync("/api/employees", new { Name = "Should Never Exist" });
 
@@ -78,6 +87,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task Create_ByAdmin_ReturnsCreated()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin
 
@@ -92,6 +102,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task Create_ByMember_ReturnsForbidden()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "2"); // seeded Org1 Member
 
@@ -108,6 +119,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task Create_ByAdminFromAnotherOrganization_ReturnsForbidden()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
         client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin, targeting Org 2
 
@@ -120,6 +132,7 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     public async Task Create_NonExistentOrganization_ReturnsBadRequest()
     {
         var client = _factory.CreateClient();
+        await client.AuthenticateAsAsync(1);
         client.DefaultRequestHeaders.Add("X-Organization-Id", "999");
         // seeded "Orphaned Admin" (id=5) whose own OrganizationId is also 999 —
         // needed since Day 38: an Admin whose own org doesn't match the
@@ -136,9 +149,11 @@ public class EmployeesAuthorizationIntegrationTests : IClassFixture<FieldOpsApiF
     {
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var org1Client = _factory.CreateClient();
+        await org1Client.AuthenticateAsAsync(1);
         org1Client.DefaultRequestHeaders.Add("X-Organization-Id", "1");
         org1Client.DefaultRequestHeaders.Add("X-Employee-Id", "1"); // seeded Org1 Admin
         var org2Client = _factory.CreateClient();
+        await org2Client.AuthenticateAsAsync(1);
         org2Client.DefaultRequestHeaders.Add("X-Organization-Id", "2");
         org2Client.DefaultRequestHeaders.Add("X-Employee-Id", "3"); // seeded Org2 Admin
 

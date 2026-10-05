@@ -3,6 +3,7 @@ using FieldOps.Api.Application;
 using FieldOps.Api.Models;
 using FieldOps.Modules.AuditLogs;
 using FieldOps.Modules.Customers;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using FieldOps.Modules.Employees;
 using FieldOps.Modules.WorkOrders;
@@ -17,6 +18,12 @@ namespace FieldOps.Api.Controllers;
 // that tenant), and verifies the acting employee's own OrganizationId
 // matches the one being acted on — exactly EmployeesController's Day 39
 // shape, this time correct from day one.
+//
+// Day 121: "who" and "which tenant" now come from the validated JWT
+// (User.GetEmployeeId()/GetOrganizationId()), no longer from the
+// X-Employee-Id/X-Organization-Id headers, which anyone could forge
+// (docs/SECURITY_REVIEW.md F1). The membership/role/ownership rules below
+// are unchanged — they now rest on a verified identity.
 [ApiController]
 [Route("api/[controller]")]
 public class WorkOrdersController : ControllerBase
@@ -66,10 +73,9 @@ public class WorkOrdersController : ControllerBase
     // the client disconnects, so abandoned requests stop their queries.
     [HttpGet("report")]
     public async Task<ActionResult<WorkOrderStatusReport>> GetStatusReport(
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -87,12 +93,11 @@ public class WorkOrdersController : ControllerBase
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<WorkOrderDto>>> GetAll(
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = DefaultPageSize)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -126,10 +131,9 @@ public class WorkOrdersController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<ActionResult<WorkOrderDto>> GetById(
         int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -153,10 +157,9 @@ public class WorkOrdersController : ControllerBase
     [HttpGet("search")]
     public async Task<ActionResult<IReadOnlyList<WorkOrderDto>>> Search(
         [FromQuery] string q,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -180,10 +183,9 @@ public class WorkOrdersController : ControllerBase
     // copy that already-known, existing data.
     [HttpPost("search/rebuild")]
     public async Task<ActionResult> RebuildSearchIndex(
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -218,11 +220,10 @@ public class WorkOrdersController : ControllerBase
     // to 980 ms, since reads and writes share one thread pool.
     public async Task<ActionResult<WorkOrderDto>> Create(
         CreateWorkOrderRequest request,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -292,10 +293,9 @@ public class WorkOrdersController : ControllerBase
     public async Task<ActionResult<WorkOrderDto>> Assign(
         int id,
         AssignWorkOrderRequest request,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -330,10 +330,9 @@ public class WorkOrdersController : ControllerBase
     [HttpPost("{id}/reassign")]
     public ActionResult<WorkOrderDto> Reassign(
         int id,
-        AssignWorkOrderRequest request,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        AssignWorkOrderRequest request)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -363,10 +362,9 @@ public class WorkOrdersController : ControllerBase
     // Open with nobody assigned.
     [HttpPost("{id}/unassign")]
     public ActionResult<WorkOrderDto> Unassign(
-        int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        int id)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -407,10 +405,9 @@ public class WorkOrdersController : ControllerBase
     // happen here instead.
     [HttpPost("{id}/reopen")]
     public ActionResult<WorkOrderDto> Reopen(
-        int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        int id)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -442,10 +439,9 @@ public class WorkOrdersController : ControllerBase
     [HttpPost("{id}/start")]
     public async Task<ActionResult<WorkOrderDto>> Start(
         int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -477,10 +473,9 @@ public class WorkOrdersController : ControllerBase
     [HttpPost("{id}/complete")]
     public async Task<ActionResult<WorkOrderDto>> Complete(
         int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = await ValidateMembershipAsync(organizationId, actingEmployeeId, cancellationToken);
         if (membershipError is not null)
         {
@@ -534,10 +529,9 @@ public class WorkOrdersController : ControllerBase
     [HttpPost("{id}/evidence")]
     public ActionResult<WorkOrderDto> AddEvidence(
         int id,
-        AddEvidenceRequest request,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId)
+        AddEvidenceRequest request)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -575,10 +569,9 @@ public class WorkOrdersController : ControllerBase
     [HttpGet("{id}/summary")]
     public async Task<ActionResult<string>> GetSummary(
         int id,
-        [FromHeader(Name = "X-Organization-Id")] int? organizationId,
-        [FromHeader(Name = "X-Employee-Id")] int? actingEmployeeId,
         CancellationToken cancellationToken)
     {
+        var (organizationId, actingEmployeeId) = (User.GetOrganizationId(), User.GetEmployeeId());
         var membershipError = ValidateMembership(organizationId, actingEmployeeId);
         if (membershipError is not null)
         {
@@ -610,7 +603,13 @@ public class WorkOrdersController : ControllerBase
     // no real customer portal/authentication exists yet. "Is this customer
     // actually the one linked to this work order" mirrors Day 42's
     // ownership shape, just for a different identity type entirely.
+    //
+    // Day 121: deliberately [AllowAnonymous] — customers have no login yet,
+    // so requiring a token here would make approval impossible. It still
+    // trusts the X-Customer-Id header: an OPEN finding, recorded in
+    // docs/SECURITY_REVIEW.md, to be closed when customers can authenticate.
     [HttpPost("{id}/approve")]
+    [AllowAnonymous]
     public ActionResult<WorkOrderDto> Approve(
         int id,
         [FromHeader(Name = "X-Organization-Id")] int? organizationId,
@@ -782,34 +781,31 @@ public class WorkOrdersController : ControllerBase
     // (still synchronous for now) and an async one for the async reads. They
     // differ only in how the acting employee is fetched; the rules themselves
     // live once, in MissingHeaders and CheckMembership.
+    //
+    // Day 121: organizationId/actingEmployeeId now come from the validated
+    // token's claims (ClaimsPrincipalExtensions), not from headers. The
+    // fallback policy already rejected requests without a valid token (401);
+    // these checks remain because a valid token can still be missing a
+    // claim, or name an employee who has since been deleted or moved —
+    // a token is valid for an hour, the database is the current truth.
     private ActionResult? ValidateMembership(int? organizationId, int? actingEmployeeId) =>
-        MissingHeaders(organizationId, actingEmployeeId)
+        MissingIdentity(organizationId, actingEmployeeId)
         ?? CheckMembership(organizationId!.Value, actingEmployeeId!.Value, _employeeDirectory.GetById(actingEmployeeId.Value));
 
     private async Task<ActionResult?> ValidateMembershipAsync(int? organizationId, int? actingEmployeeId, CancellationToken cancellationToken) =>
-        MissingHeaders(organizationId, actingEmployeeId)
+        MissingIdentity(organizationId, actingEmployeeId)
         ?? CheckMembership(organizationId!.Value, actingEmployeeId!.Value, await _employeeDirectory.GetByIdAsync(actingEmployeeId.Value, cancellationToken));
 
-    private ActionResult? MissingHeaders(int? organizationId, int? actingEmployeeId)
-    {
-        if (organizationId is null)
-        {
-            return BadRequest("X-Organization-Id header is required.");
-        }
-
-        if (actingEmployeeId is null)
-        {
-            return BadRequest("X-Employee-Id header is required.");
-        }
-
-        return null;
-    }
+    private ActionResult? MissingIdentity(int? organizationId, int? actingEmployeeId) =>
+        organizationId is null || actingEmployeeId is null ? Unauthorized() : null;
 
     private ActionResult? CheckMembership(int organizationId, int actingEmployeeId, EmployeeSummary? actingEmployee)
     {
         if (actingEmployee is null)
         {
-            return BadRequest($"Employee {actingEmployeeId} does not exist.");
+            // The token names an employee who no longer exists: the identity
+            // is no longer valid, so 401 rather than Day 40's 400.
+            return Unauthorized();
         }
 
         if (actingEmployee.OrganizationId != organizationId)
