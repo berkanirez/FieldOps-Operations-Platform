@@ -175,6 +175,8 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 ### Known limitations
 
+A security self-review against the OWASP Top 10, with reproducible evidence and a prioritized fix plan, is in [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md).
+
 * JWT issuance exists, but no endpoint enforces it yet — requests are still identified by unverified `X-Organization-Id` / `X-Employee-Id` headers. Login takes only an employee id (no password), and role-based hiding in the frontend is a UI convenience, not authorization.
 * The JWT signing key is in `appsettings.Development.json` (development only).
 * The AI provider is a deterministic fake; evidence "attachments" are plain text notes.
