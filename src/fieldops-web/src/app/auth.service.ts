@@ -39,11 +39,11 @@ export class AuthService {
     return this.token() !== null;
   }
 
-  // Day 95: a UI-convenience check ONLY — nothing on the backend enforces
-  // this yet (no [Authorize], no role check in WorkOrdersController.Create).
-  // Hiding a button here stops a casual user from finding it; it does
-  // nothing to stop someone from calling the API directly. Real enforcement
-  // belongs on the server, always.
+  // Day 95: a UI-convenience check ONLY. Hiding a button here stops a casual
+  // user from finding it; it does nothing to stop someone from calling the
+  // API directly — real enforcement belongs on the server, always. (Since
+  // Day 121 the server requires a token and enforces the roles it checks,
+  // but WorkOrdersController.Create itself is still open to Members.)
   isAdmin(): boolean {
     return this.role() === 'Admin';
   }

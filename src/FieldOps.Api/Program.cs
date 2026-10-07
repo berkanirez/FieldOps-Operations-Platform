@@ -87,6 +87,7 @@ builder.Services.AddCors(options =>
 // X-Employee-Id header mechanism (Day 40) stays exactly as it was. This
 // registers the machinery to VALIDATE a bearer token when a later day
 // actually starts requiring one; until then it has nothing to do.
+// (Superseded on Day 121: tokens are required by the fallback policy below.)
 //
 // Day 121 (docs/SECURITY_REVIEW.md F4): the hard-coded fallback signing key
 // is gone — it was published in this public repository, and with no Jwt

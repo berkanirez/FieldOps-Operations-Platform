@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-28 (Phase 4, Day 75)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 Days 66-74 built a complete, working RabbitMQ pipeline for `WorkOrderCompletedEvent` — publishing (`RabbitMqEventPublisher`, via the Outbox pattern), and two consumers (`WorkOrderCompletedEventConsumer` for notifications, `WorkOrderCompletedAuditConsumer` for audit logging), both idempotent (Inbox pattern) and both resilient to permanent failures (dead-letter queue). All of this, however, still lives inside the single `FieldOps.Api` deployment — both consumers reach their Inbox/dead-letter tracking through `IWorkOrderDirectory`, a direct C# interface call into the `WorkOrders` module's own database, something only possible because everything is compiled and deployed together.
@@ -36,3 +38,11 @@ Week 15's roadmap topic is extracting a genuinely separate notification service.
 
 * **Let the notification service keep reading `IWorkOrderDirectory`/the `WorkOrders` database directly, just running in a separate process.** Rejected outright — this is not a real extraction, it is a distributed monolith: two processes sharing one database is one of the most common ways teams end up with "microservices" that must be deployed together anyway, defeating the entire point of Week 15's topic.
 * **Give the notification service read access to a copy/replica of `WorkOrder` data so it can look up richer context than the event alone provides.** Rejected for today's scope — `WorkOrderCompletedEvent`'s existing fields (`WorkOrderId`, `Title`, `CustomerId`, `CompletedAtUtc`) are already sufficient for both current consumers; introducing a data-replication concern (keeping a copy in sync) would be solving a problem that doesn't exist yet, the same "no premature complexity" reasoning behind every prior ADR in this repo.
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **Implemented on Day 76** exactly as decided: a separate worker project with no `ProjectReference` to `FieldOps.Api`, its own `NotificationServiceDbContext` (inbox and failed-attempt tables only), its own database and migrations, and RabbitMQ as the only channel. The consumer logic came across unchanged in shape: the service has its own copy of `EventConsumerBase` (no shared reference, same reason as the event record), and only the `IInboxStore` implementation is genuinely new, backed by the service's own database, as predicted.
+* **The deferred "where does the event type live" question:** answered for now with a deliberate duplicate record in each codebase (see the ADR 0004 note), not a shared project. A shared contracts package becomes worth its cost when there is a second consumer service or a separate repository.
+* **The cost of its own database was real and caught late:** on Day 125 a clean-room run of the README showed that the quickstart never created `FieldOpsNotifications`; the API worked, and only the notification service's logs showed the failure. The README now applies all six migration targets.

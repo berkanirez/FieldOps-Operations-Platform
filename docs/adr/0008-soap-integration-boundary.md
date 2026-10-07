@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-29 (Phase 4, Day 82)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 Every external interaction FieldOps has built so far — REST endpoints (Phase 2 onward), RabbitMQ messaging (Week 13-15), Elasticsearch (Week 16) — has been JSON-based and built by us, or built recently by someone else following modern conventions. Week 16's roadmap names a genuinely different kind of interaction: SOAP, a protocol that predates REST's dominance and is still the *only* interface many older, real-world enterprise systems expose — accounting/ERP systems, some banking and payment systems, and a number of government systems. FieldOps has no existing SOAP interaction, but the realistic scenario this ADR is written against is a real one: once a completed work order needs to be billed, FieldOps would need to hand that fact to whatever accounting/ERP system a customer's organization already runs — and if that system is an older one, SOAP may be the only door in.
@@ -38,3 +40,10 @@ None of this is implemented today. This ADR exists so that Day 83's actual clien
 
 * **Wait until Day 83 to think about the boundary at all, and let the generated SOAP client types be used directly wherever billing logic needs them.** Rejected — this is exactly the "distributed monolith" mistake ADR 0005 already rejected for service extraction, just at the type-boundary level instead of the deployment level: a future change to the external accounting system's WSDL (or replacing it entirely) would then ripple into `WorkOrdersController` and anywhere else that touched the generated types directly.
 * **Treat SOAP as effectively obsolete and skip this topic, since FieldOps has no real SOAP need today.** Rejected — the roadmap places this here specifically because real, working .NET backend roles routinely still encounter legacy SOAP systems (accounting, banking, government, and many enterprise B2B integrations), and being unable to reason about WSDL, envelopes, and SOAP Faults is a genuine, non-hypothetical gap for a junior/junior+ .NET developer to have.
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **Built as decided on Day 83:** `IBillingAmountSpeller` with `DataAccessBillingAmountSpeller` behind it, a generated `System.ServiceModel` client against a public SOAP service, and SOAP faults translated at the boundary. ADR 0009 names it the codebase's clearest anti-corruption layer.
+* **Package versions pinned (Day 123):** the `System.ServiceModel.*` packages had a floating `4.10.*` range; they are now pinned to `4.10.3` (SECURITY_REVIEW F11).

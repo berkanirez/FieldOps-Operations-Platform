@@ -18,6 +18,17 @@ services:
       MSSQL_SA_PASSWORD: ${SA_PASSWORD}
     ports:
       - "14330:1433"
+    # Day 125: the container counts as "started" seconds before SQL Server
+    # accepts logins, so migrations run right after `up` could fail with a
+    # pre-login handshake error. This check runs a real query; `docker
+    # compose up --wait` blocks until it passes. ($$ escapes Compose's own
+    # interpolation: the variable is expanded inside the container.)
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     networks:
       - fieldops
 

@@ -2,6 +2,15 @@
 
 A .NET 10 backend portfolio built around **FieldOps**, a multi-tenant field-service management platform, plus two smaller supporting applications. FieldOps starts as a modular monolith and grows into a distributed system with messaging, search, observability, an Angular frontend, and Kubernetes deployment manifests.
 
+**Highlights**
+
+* **Runs from a clean machine** — one `docker compose up`, one migration loop, then the [API examples](#api-examples) below; every documented command was re-run against a freshly created stack.
+* **Secure by default** — every endpoint requires a JWT unless explicitly marked anonymous; tenant and identity come only from token claims; an [OWASP Top 10 self-review](docs/SECURITY_REVIEW.md) lists what was fixed and what is still open.
+* **Measured, not assumed** — k6 load tests, an index chosen from execution plans, and a thread-pool hang found with `dotnet-stack` instead of guessed.
+* **Reliable messaging** — transactional outbox, idempotent inbox consumers, and a dead-letter queue between the API and a separately deployable notification service.
+* **Tested at the right level** — unit tests for business rules; integration tests against real SQL Server through Testcontainers; Angular tests with Vitest; a smoke test in CI.
+* **Decisions written down** — [architecture decision records](docs/adr) and "Day N" comments explain why the code looks the way it does.
+
 ## Projects
 
 | Project | Type | Highlights |
@@ -28,6 +37,33 @@ FieldOps manages organizations, employees, customers, and work orders for field-
 
 ### Architecture
 
+```mermaid
+flowchart LR
+    browser([Browser]) --> web["fieldops-web<br/>Angular SPA on nginx"]
+    web -- "/api (reverse proxy)" --> api
+
+    subgraph api["FieldOps.Api — modular monolith"]
+        direction TB
+        controllers["Controllers<br/>JWT auth · tenant isolation · rate limits"]
+        services["Application services<br/>cross-module rules"]
+        modules["Modules: Organizations · Employees ·<br/>Customers · WorkOrders · AuditLogs"]
+        workers["Background workers<br/>outbox publisher · cache warmer"]
+        controllers --> services --> modules
+        workers --> modules
+    end
+
+    modules --> sql[("SQL Server<br/>one database per module")]
+    api -- "cache-aside report" --> redis[("Redis")]
+    workers -- "outbox events" --> rabbit{{"RabbitMQ"}}
+    workers -- "search documents" --> es[("Elasticsearch")]
+    api -- "full-text search" --> es
+    rabbit --> notify["FieldOps.NotificationService<br/>separate worker"]
+    notify --> notifysql[("Notifications DB")]
+    api -. "SOAP via anti-corruption layer" .-> soap["Number-conversion<br/>SOAP service"]
+```
+
+A request goes browser → nginx (`/api`) → controller (token validated, tenant taken from its claims) → application service → module → its own SQL Server database. Redis, RabbitMQ and Elasticsearch are optional at runtime: when they are down, the API keeps serving and degrades (no cache, delayed messages, no search).
+
 * **Modular monolith** — five modules (Organizations, Employees, Customers, Work Orders, Audit Logs), each a separate class library with `internal` domain entities and its **own SQL Server database**, exposing only a public interface and DTOs to the host API. Cross-module references are validated in application code, not by foreign keys (see [ADR 0003](docs/adr/0003-database-per-module.md)).
 * **Work order lifecycle** — Open → Assigned → InProgress → Completed, with reassignment, reopening, and customer approval, guarded by tenant isolation and role/ownership checks on every action.
 * **Caching** — a Redis cache-aside status report with explicit invalidation and a background cache warmer.
@@ -37,31 +73,55 @@ FieldOps manages organizations, employees, customers, and work orders for field-
 * **External integration** — a SOAP service consumed behind an anti-corruption layer ([ADR 0009](docs/adr/0009-anti-corruption-layer.md)).
 * **Observability and resilience** — structured JSON logging with correlation IDs, OpenTelemetry distributed tracing propagated through RabbitMQ message headers, custom metrics (including outbox publish lag), `/health/live` and `/health/ready` endpoints, and a Polly timeout + circuit breaker around Elasticsearch.
 * **Cross-cutting** — per-organization rate limiting, idempotency keys, audit logging, and an `IAiProvider` abstraction for summarizing work-order evidence notes.
+* **Security** — JWT required on every endpoint by default; identity and tenant come from validated token claims; PBKDF2-hashed passwords with uniform login failures; rate limits per tenant and per login client; ProblemDetails errors without internals; security events logged. See the [security self-review](docs/SECURITY_REVIEW.md).
+* **Performance and resilience under load** — organization filtering and counting in SQL with a measured `(OrganizationId, Status)` index, paginated lists, async I/O end to end on the hot paths, transient-fault retries for SQL Server, fail-fast Redis. k6 load tests live in [`tests/load`](tests/load).
 
-Architecture decisions are recorded in [docs/adr](docs/adr).
+A [five-minute demo script](docs/DEMO_SCRIPT.md) walks through the system live; the [architecture retrospective](docs/ARCHITECTURE_RETROSPECTIVE.md) maps every boundary and abstraction to the problem it solved and its industry name, and the interview notes answer common [C#/ASP.NET Core](docs/interview/csharp-aspnetcore.md) and [SQL/EF Core/distributed-systems](docs/interview/data-and-distributed.md) questions from this code. Architecture decisions are recorded in [docs/adr](docs/adr); each was reviewed against the code on Day 126 and carries a "Later Developments" section where reality moved on:
+
+| ADR | Decision |
+|---|---|
+| [0001](docs/adr/0001-modular-monolith-one-way-dependencies.md) | Modular monolith; modules never reference the host or each other |
+| [0002](docs/adr/0002-cross-module-references-via-host-orchestration.md) | Cross-module rules live in the host (application services) |
+| [0003](docs/adr/0003-database-per-module.md) | Each module owns its own database |
+| [0004](docs/adr/0004-domain-events-vs-integration-events.md) | Domain versus integration events, and when one becomes the other |
+| [0005](docs/adr/0005-notification-service-boundary.md) | The notification service's boundary and data ownership |
+| [0006](docs/adr/0006-rest-vs-messaging.md) | REST for questions that need an answer now, messaging for announced facts |
+| [0007](docs/adr/0007-independent-deployment.md) | One Compose file is not independent deployment |
+| [0008](docs/adr/0008-soap-integration-boundary.md) | SOAP stays behind its own boundary |
+| [0009](docs/adr/0009-anti-corruption-layer.md) | What counts as an anti-corruption layer |
+| [0010](docs/adr/0010-identity-and-tenant-from-token-claims.md) | Identity and tenant only from token claims; secure by default |
+| [0011](docs/adr/0011-optional-infrastructure-degrades.md) | SQL Server is essential; Redis, RabbitMQ and Elasticsearch degrade |
+
+Code comments often begin with "Day N": this repository was built as a day-by-day learning project, and those comments record why each decision was made at the time.
 
 ### Running it with Docker Compose
 
 ```
 cp .env.example .env
 # edit .env and set a real SA_PASSWORD
-docker compose up --build -d
+docker compose up --build -d --wait
 ```
 
-This starts SQL Server, Redis, RabbitMQ, Elasticsearch, the API, and the notification service. Apply migrations for each of the five modules against the containerized SQL Server (exposed on `localhost,14330`):
+This starts SQL Server, Redis, RabbitMQ, Elasticsearch, the API, and the notification service; `--wait` returns only when SQL Server's health check passes (it accepts logins), so the next step cannot race its startup. The databases are not created automatically: apply the migrations of the five modules **and of the notification service** against the containerized SQL Server (exposed on `localhost,14330`). Requires the .NET 10 SDK and the `dotnet-ef` tool (`dotnet tool install --global dotnet-ef`).
 
 ```
-cd src/FieldOps.Modules.Organizations && dotnet ef database update --connection "Server=localhost,14330;Database=FieldOpsOrganizations;User Id=sa;Password=<your SA_PASSWORD>;TrustServerCertificate=True;" && cd ../..
-# ...same pattern for FieldOps.Modules.Employees, FieldOps.Modules.WorkOrders, FieldOps.Modules.Customers, FieldOps.Modules.AuditLogs
+SA_PASSWORD='<your SA_PASSWORD>'
+for target in Modules.Organizations:FieldOpsOrganizations Modules.Employees:FieldOpsEmployees \
+              Modules.WorkOrders:FieldOpsWorkOrders Modules.Customers:FieldOpsCustomers \
+              Modules.AuditLogs:FieldOpsAuditLogs NotificationService:FieldOpsNotifications; do
+  dotnet ef database update --project "src/FieldOps.${target%%:*}" \
+    --connection "Server=localhost,14330;Database=${target##*:};User Id=sa;Password=$SA_PASSWORD;TrustServerCertificate=True;"
+done
 ```
 
-Then visit:
+Without the notification service's database the API still works, but the notification service fails every completed-work-order event with `Cannot open database "FieldOpsNotifications"`.
 
-* `http://localhost:5190/health/ready` — dependency health
-* `http://localhost:5190/api/organizations` — seeded organizations
-* `http://localhost:5190/api/workorders` — requires a bearer token from `POST /api/auth/login` (see below)
+Then check:
 
-Tear down with `docker compose down`.
+* `http://localhost:5190/health/ready` — dependency health (anonymous)
+* every other endpoint requires a bearer token from `POST /api/auth/login` — see the API examples below
+
+Tear down with `docker compose down`. The Compose file uses no named volumes, so this also deletes the databases; the migrations must be applied again after the next `up`.
 
 ### Seeded demo identities
 
@@ -72,20 +132,48 @@ Employees log in with their id and password and send the returned JWT as a beare
 | 1 | id `1` | id `2` | id `1` |
 | 2 | id `3` | id `4` | — |
 
-Example:
+Login is rate limited (5 attempts per minute per client address; the sixth returns `429`, successful logins included) and returns the same 401 for an unknown employee and a wrong password. Tokens are valid for an hour, so log in once and reuse them.
+
+### API examples
+
+Run against the Docker Compose stack above (bash; every command and status code below was checked against a freshly created stack).
 
 ```
-TOKEN=$(curl -s -X POST http://localhost:5190/api/auth/login -H "Content-Type: application/json" \
-  -d '{"employeeId":1,"password":"FieldOps-Demo-2026!"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+API=http://localhost:5190
+login() { curl -s -X POST $API/api/auth/login -H "Content-Type: application/json" \
+  -d "{\"employeeId\":$1,\"password\":\"FieldOps-Demo-2026!\"}" | sed -E 's/.*"token":"([^"]+)".*/\1/'; }
+ADMIN=$(login 1)    # Admin of organization 1
+MEMBER=$(login 2)   # Member of organization 1
 
-curl -X POST http://localhost:5190/api/workorders \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"Title":"Fix the HVAC unit"}'
+# create (201) — the response contains the new work order's id
+curl -X POST $API/api/workorders -H "Authorization: Bearer $ADMIN" \
+  -H "Content-Type: application/json" -d '{"title":"Fix the HVAC unit","customerId":1}'
+ID=1   # the id returned above
 
-curl http://localhost:5190/api/workorders/report -H "Authorization: Bearer $TOKEN"
+# lifecycle: the Admin assigns, the assigned Member starts and completes (200 each)
+curl -X POST $API/api/workorders/$ID/assign -H "Authorization: Bearer $ADMIN" \
+  -H "Content-Type: application/json" -d '{"employeeId":2}'
+curl -X POST $API/api/workorders/$ID/start    -H "Authorization: Bearer $MEMBER"
+curl -X POST $API/api/workorders/$ID/complete -H "Authorization: Bearer $MEMBER"
+
+# reads (200): a page of work orders, one work order, the status report, the caller's organization
+curl "$API/api/workorders?page=1&pageSize=10" -H "Authorization: Bearer $ADMIN"
+curl $API/api/workorders/$ID                  -H "Authorization: Bearer $ADMIN"
+curl $API/api/workorders/report               -H "Authorization: Bearer $ADMIN"
+curl $API/api/organizations                   -H "Authorization: Bearer $ADMIN"
 ```
 
-Login is rate limited (5 attempts per minute per client address) and returns the same 401 for an unknown employee and a wrong password.
+Error cases (all return ProblemDetails bodies):
+
+| Request | Status |
+|---|---|
+| any endpoint without a token | `401` |
+| login with a wrong password (or an unknown employee) | `401` |
+| organization 2's Admin (`login 3`) reads organization 1's work order | `404` — other tenants' data is indistinguishable from missing data |
+| a Member tries to assign a work order | `403` |
+| `GET /api/workorders?pageSize=500` | `400` — page size is capped |
+
+Completing a work order also publishes an event through the outbox. For a work order with a customer, `docker compose logs fieldops-notification-service` then shows `Notification: Work order 'Fix the HVAC unit' has been completed and is awaiting your approval.` (work orders without a customer are consumed silently: there is no one to notify).
 
 ### Angular frontend (`src/fieldops-web`)
 
@@ -131,7 +219,7 @@ The Secret is created from the command line on purpose: Kubernetes Secrets are o
 # requires an ingress controller; the local setup used ingress-nginx:
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/cloud/deploy.yaml
 kubectl apply -f k8s/fieldops-ingress.yaml
-curl http://localhost/api/organizations
+curl http://localhost/api/health/ready   # routed to the API; other API endpoints need a bearer token
 ```
 
 ingress-nginx was announced for retirement by the Kubernetes project (March 2026); it is used here only on a local cluster. The Ingress rules themselves are controller-agnostic.

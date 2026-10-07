@@ -7,10 +7,6 @@ import { WorkOrderStatusReport } from './work-order-status-report';
 
 @Injectable({ providedIn: 'root' })
 export class WorkOrderService {
-  // Day 90: hardcoded, same demo organization/employee every other day's
-  // curl verification has used. No login/JWT exists yet (that's a later
-  // Week 18 topic) — this is a deliberate, temporary stand-in for real
-  // authentication, not a production shape.
   // Day 105: relative, not http://localhost:5138 — in a browser, "localhost"
   // means the visitor's own machine, so a hardcoded host only ever worked on
   // a developer laptop. Requests now go to whatever origin served the page;

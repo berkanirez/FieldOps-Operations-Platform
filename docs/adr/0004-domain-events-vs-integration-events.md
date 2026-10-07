@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-27 (Phase 4, Day 70)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 Days 66-69 built a real, working RabbitMQ producer/consumer pipeline: `WorkOrdersController.Complete` publishes `WorkOrderCompletedEvent` to a named `fanout` exchange, and two independent consumers (`WorkOrderCompletedEventConsumer`, `WorkOrderCompletedAuditConsumer`) each receive their own copy of it. Throughout, this has simply been called "an event" or "a domain event," without ever distinguishing that term from a related but meaningfully different one: an **integration event**.
@@ -33,3 +35,11 @@ This event will need to be **re-classified as an integration event** — with th
 
 * **Treat `WorkOrderCompletedEvent` as an integration event already, and add versioning/contract discipline now, ahead of Week 15.** Rejected — there is no real external consumer yet to protect against; adding this now would be exactly the premature complexity this workspace has consistently avoided (ADR 0003's Redis/database-per-module reasoning, and Day 63's `IAiProvider` abstraction built only once a real need existed). It would also risk guessing wrong about what the real contract needs to look like before a real second deployment exists to inform that design.
 * **Don't classify at all — just call everything "an event" and decide later, case by case.** Rejected — without a named, agreed distinction, the moment a service actually gets extracted in Week 15, there would be no existing checklist or trigger prompting the "this now needs versioning" conversation; it would be easy to extract the service and simply forget that the event's contract status changed underneath it.
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **The trigger fired on Day 76:** `FieldOps.NotificationService` was extracted into its own deployable, so `WorkOrderCompletedEvent` became an **integration event**, as this ADR predicted. The in-process audit consumer still exists, but the event's shape is now a contract.
+* **How the contract is held today:** not by a shared `Contracts` project. The notification service keeps its own copy of the record (`src/FieldOps.NotificationService/WorkOrderCompletedEvent.cs`), with a comment explaining why; both sides agree on the same JSON shape. Nothing enforces that agreement — `dotnet build` can no longer catch a drift, which is exactly the cost this ADR described.
+* **Still not built:** schema versioning (`...V1`) and tolerance rules for rolling deployments. The event's shape has not changed since extraction, so no real versioning problem has occurred yet. The safe rule while both copies exist: add fields only; never rename or remove one while the other side may still be deployed.

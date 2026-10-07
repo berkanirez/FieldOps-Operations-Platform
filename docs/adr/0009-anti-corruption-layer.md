@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-29 (Phase 4, Day 84)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 Week 16's last roadmap topic is "anti-corruption layer." By the time this day started, FieldOps had already built the thing itself, more than once, without ever calling it that: `INotificationSender` (Day 51), `IAiProvider` (Day 63), `IWorkOrderSearchIndex` (Day 79), and most recently `IBillingAmountSpeller` (Day 83) all share one shape — a FieldOps-owned interface standing between the rest of the codebase and one specific external dependency's own types and failure modes.
@@ -32,3 +34,9 @@ All four interfaces above are the same underlying idea — dependency inversion 
 
 * **Treat every seam interface in this codebase as "an anti-corruction layer" for roadmap purposes, without distinguishing degrees.** Rejected — this would make the term meaningless (a vocabulary word applied to everything is not adding any real distinction), and would misrepresent, in an interview or review setting, what `INotificationSender` actually is.
 * **Build a brand-new anti-corruction-layer example from scratch today, purely to have a dedicated one.** Rejected — `IBillingAmountSpeller` already is one, built yesterday for a real (if learning-focused) reason; writing a second, purpose-built example only to check a box would be exactly the kind of premature, unmotivated code this workspace has consistently avoided.
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **No change:** all four interfaces and their implementations still exist as described; no new external dependency has been added since, so the spectrum this ADR defines has not needed a new entry.

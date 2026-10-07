@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-28 (Phase 4, Day 77)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 Day 76 genuinely extracted `FieldOps.NotificationService` as a separate, independently-deployed process, communicating with `FieldOps.Api` only through RabbitMQ. FieldOps, however, already had a second, much older example of cross-actor communication that was never built on messaging at all: `WorkOrdersController.Approve` — a customer confirming, over plain HTTP, that a completed work order is acceptable. No ADR has ever stated *why* one is REST and the other is messaging, or what should decide that choice the next time a new interaction is designed (a reporting service reading data from `FieldOps.Api`, or any future service-to-service call).
@@ -31,3 +33,11 @@ The deciding factor in all three cases is never the topic (an event about a busi
 
 * **Decide REST vs. messaging case by case, with no written rule.** Rejected — this is exactly what happened until today (both existing choices turned out correct, but by instinct, not by a stated rule), and the next person (or the next session) making this decision has nothing to check the choice against. A named rule now means a badly-reasoned choice next time is at least visible as breaking one.
 * **Route everything through RabbitMQ, including request/reply-shaped interactions like `Approve`, now that a message broker already exists in the stack.** Rejected — a request/reply-over-a-queue pattern exists (correlation IDs, reply-to queues) but adds real infrastructure and complexity to solve a problem synchronous HTTP already solves directly; introducing it here would be exactly the premature complexity this workspace has consistently avoided (ADR 0003's Redis/database-per-module reasoning, Day 63's `IAiProvider`).
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **The rule still holds and has not been tested by a new case:** no interaction added since Day 77 needed a decision between REST and messaging. There is still no REST call between two FieldOps services, so the deferred inter-service REST resilience problem has not arisen.
+* **Resilience was added for other synchronous dependencies** (ADR 0011): a timeout and circuit breaker around Elasticsearch (Day 87), retries for SQL Server (Day 111), fail-fast for Redis (Day 116). The same tools would apply to a future inter-service REST call.
+* **`Approve` is still the REST example,** and it is still identified by an `X-Customer-Id` header rather than a token — an open finding in [SECURITY_REVIEW.md](../SECURITY_REVIEW.md) and ADR 0010, unrelated to the REST-versus-messaging rule itself.

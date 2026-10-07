@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-17 (Phase 3, Day 32)
 
+Reviewed against the code on 2026-10-06 (Phase 6, Day 126) — see **Later Developments**.
+
 ## Context
 
 FieldOps's domain spans ten modules (Identity, Organizations, Employees, Customers, Work Orders, Scheduling, Attachments, Notifications, Reporting, Audit Logs). Building all of this inside a single project, with no internal boundaries, would let any part of the codebase reach into any other part's internals — over time this makes it hard to reason about what depends on what, and hard to change one area without breaking another.
@@ -30,3 +32,12 @@ Two rules govern the boundary:
 
 * **Single flat project for all of FieldOps.** Rejected — no enforced boundary at all; every module would be able to reach into every other module's internals from day one, working directly against Phase 4's stated later goal.
 * **Full microservices from the start.** Rejected — Phase 3 (Weeks 7-12) is explicitly the modular-monolith phase; splitting into real services with independent deployment and network communication is Phase 4's stated scope (Weeks 13+), not this phase's. Introducing that complexity now would be building ahead of the roadmap's own sequencing.
+
+## Later Developments (reviewed 2026-10-06, Day 126)
+
+The decision above is kept as written; these notes record what happened afterwards.
+
+* **"Not yet decided" is now decided:** ADR 0002 (Day 33) settled how modules reference each other — the host orchestrates, modules never reference modules.
+* **Five modules, not ten:** Organizations, Employees, Customers, Work Orders and Audit Logs were built. Notifications became a separate service instead of a module (ADR 0005); Identity is handled in the host (ADR 0010); the remaining modules were never needed by the project's scope. The "ten class libraries" cost did not materialize.
+* **The in-memory implementations are gone:** every module's `InMemory*Directory` was replaced by an EF Core implementation (Day 48 onward), exactly the swap this ADR's first consequence predicted — the public interfaces stayed, their callers did not change at the time.
+* **The core decision still holds:** the module projects still reference no other module and not the host, and their entities and `DbContext`s are still `internal`.

@@ -36,7 +36,8 @@ public class EmployeeApplicationService
 
         // Every employee created through this API starts as a Member —
         // creating a new Admin isn't supported yet (out of Day 37's scope).
-        // Today's seeded Admins (InMemoryEmployeeDirectory) are the only
+        // The seeded Admins (EF Core seed data in EmployeesDbContext, which
+        // replaced the original InMemoryEmployeeDirectory) are the only
         // Admins that exist.
         var employee = _employeeDirectory.Create(name, organizationId, EmployeeRole.Member, _passwordHasher.Hash(password));
         return EmployeeCreationResult.Success(employee);

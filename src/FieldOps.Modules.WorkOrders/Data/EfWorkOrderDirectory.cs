@@ -6,7 +6,9 @@ namespace FieldOps.Modules.WorkOrders.Data;
 // internal, replacing InMemoryWorkOrderDirectory (Day 40) as
 // IWorkOrderDirectory's real implementation — every state-machine rule
 // (Day 41-46) is unchanged, just persisted via SaveChanges() instead of
-// living only in a List<WorkOrder>. Still deliberately synchronous.
+// living only in a List<WorkOrder>. The list/report/get-by-id reads and the
+// create/assign/start/complete writes are async (Days 118-119); the
+// remaining methods are still synchronous.
 internal class EfWorkOrderDirectory : IWorkOrderDirectory
 {
     private readonly WorkOrdersDbContext _dbContext;

@@ -16,6 +16,8 @@ namespace FieldOps.Api.Controllers;
 // X-Employee-Id header mechanism (Day 40) is untouched — this endpoint only
 // ADDS token issuance, it replaces nothing today. Angular's JWT interceptor
 // and the actual [Authorize]-protected endpoints are later days' work.
+// (Superseded: since Day 121 every endpoint requires a token and the
+// identity headers are ignored — see below.)
 //
 // Day 121: the whole API now requires a token (fallback policy in
 // Program.cs), so login itself must be reachable anonymously. The signing

@@ -7,7 +7,8 @@ namespace FieldOps.Modules.Employees.Data;
 // IEmployeeDirectory's real implementation. Ids for newly-created employees
 // (Create) come from SQL Server's own IDENTITY column, continuing after the
 // 5 explicitly-seeded Ids (HasData) — same as EfOrganizationDirectory
-// (Day 48), still deliberately synchronous.
+// (Day 48). Reads used on every request are async since Day 118/123;
+// Create stays synchronous for now.
 internal class EfEmployeeDirectory : IEmployeeDirectory
 {
     private readonly EmployeesDbContext _dbContext;
